@@ -154,6 +154,7 @@ extension Engine {
         func reply(_ text: String) { run { g in self.say(text, g); self.resumeAfterHelp(g) } }
 
         // Spotify, YouTube, files and the forecast. First, because a song can be called anything: "play Home on Spotify".
+        if let done = updateHear(h) { return done }
         if let done = profileHear(h) { return done }
         if let done = voiceInstallHear(h) { return done }
         if let done = extrasHear(h) { return done }

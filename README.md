@@ -34,20 +34,33 @@ You need the Xcode command line tools (`xcode-select --install`).
 
     ./build.sh
 
-This makes `dist/Nova.app` and `site/Nova.zip`.
+This makes `dist/Nova.app`, and for the website `site/Nova.zip` (the download), `site/payload.zip` and
+`site/version.json` (what installed copies read to update themselves).
+
+## Releasing an update
+
+1. In `build.sh`, raise `version` and say what is new in `notes`.
+2. Run `./build.sh`.
+3. Deploy the site (`npx wrangler deploy`). Every installed Nova then offers the update by voice and on screen.
+
+The app in the Applications folder is a tiny starter (`src/ui/host.c`) that never changes. It loads the
+window and engine (the "payload") from `~/Library/Application Support/Nova/app`, and an update replaces
+only that. Because the starter is untouched, macOS keeps the permissions the user granted.
 
 ## Layout
 
 - `src/*.swift` the engine: listening rules, understanding, music, app control.
 - `src/ui/NovaUI.swift` the window, the welcome screens, the menu bar icon and floating panel.
+- `src/ui/host.c` the starter program that is the app itself.
+- `src/update.swift` the self-updater.
 - `src/kokoro_server.py` the helper for the optional natural voices.
 - `src/reaper/` the script that REAPER loads.
 - `site/` the website.
 
 ## Check without making a sound
 
-    NOVA_HOME=/tmp/nova-test dist/Nova.app/Contents/Resources/nova-engine --selftest
-    NOVA_HOME=/tmp/nova-test dist/Nova.app/Contents/Resources/nova-engine --route "what can you do" "set an alarm for 7"
+    NOVA_HOME=/tmp/nova-test dist/Nova.app/Contents/Resources/payload/nova-engine --selftest
+    NOVA_HOME=/tmp/nova-test dist/Nova.app/Contents/Resources/payload/nova-engine --route "what can you do" "set an alarm for 7"
 
 `NOVA_HOME` points the app at a throwaway data folder. Normally data lives in
 `~/Library/Application Support/Nova`.

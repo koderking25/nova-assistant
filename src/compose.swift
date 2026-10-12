@@ -490,6 +490,8 @@ extension Engine {
             run { g in self.say(r == "on" ? "Done. I'll start by myself whenever you log in, out of sight, and listen for my name." : r == "off" ? "Okay. I won't start by myself any more." : "The Mac wouldn't let me set that. You can add Nova yourself under System Settings, General, Login Items.", g) }
             return
         }
+        if text == "update yes" { acceptUpdate(); return }
+        if text == "update no" { declineUpdate(); return }
         // The welcome screens: lines to say aloud, and at the end, the answers that were given.
         if text.hasPrefix("speak ") { let line = String(text.dropFirst(6)); run { g in self.say(line, g) }; return }
         if text.hasPrefix("setup ") {

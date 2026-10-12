@@ -1598,6 +1598,7 @@ func selfTest(_ engine: Engine, _ midi: MidiIO) -> Never {
     moreSelfTest(engine) { check($0, $1, $2) }
     appsSelfTest(engine) { check($0, $1, $2) }
     extrasSelfTest(engine) { check($0, $1, $2) }
+    updateSelfTest(engine) { check($0, $1, $2) }
     let loud = Sounds.offlineCheck()
     check("built-in band instruments make sound", loud > 0.01, String(format: "peak level %.2f", loud))
     // Skipping past the end of a song moves to the next song.
@@ -1848,6 +1849,13 @@ if args.contains("--sound-check") {
     print("after being stopped, a note started it again: \(s.engine.isRunning ? "yes" : "no")")
     exit(0)
 }
+if args.contains("--update-test") {
+    // Looks for an update and installs it, exactly as the app does after a "yes". For checking the whole path.
+    guard let info = Updater.check() else { print("no newer version found (this is \(novaVersion))"); exit(0) }
+    print("found \(info.version): \(info.notes)")
+    print(Updater.install(info) ?? "installed")
+    exit(0)
+}
 if args.contains("--install-voice") {
     // Runs the natural voice download exactly as the app does, printing each step. For checking it end to end.
     let t = now()
@@ -1868,7 +1876,7 @@ if args.contains("--library") {
 }
 // Checks run from the command line must never disturb the copy the player is using, and a check
 // given too few arguments must stop here, not carry on and start up as a second the assistant.
-let checkFlags = ["--selftest", "--route", "--chat", "--lookup", "--reband", "--speak", "--ask", "--library", "--daw-test", "--reaper-test", "--new-logic-project", "--mute", "--cold", "--reaper", "--sound-check", "--install-voice"]
+let checkFlags = ["--selftest", "--route", "--chat", "--lookup", "--reband", "--speak", "--ask", "--library", "--daw-test", "--reaper-test", "--new-logic-project", "--mute", "--cold", "--reaper", "--sound-check", "--install-voice", "--update-test"]
 let isCheck = args.contains { checkFlags.contains($0) }
 if !isCheck, instanceLock >= 0 { becomeOnlyCopy() }
 let midi = MidiIO()
@@ -2129,6 +2137,7 @@ if !Opt.textMode { print(engine.sheetText()) }
 
 engine.mem.sessions += 1
 engine.restoreAlarms()
+engine.startUpdates()
 VoiceInstaller.placeHelper()
 // Without a piano there are no button keys to learn. With one, its top key is asked for after the hello.
 if midi.keyboards.isEmpty { engine.awaitingTop = false }

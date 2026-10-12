@@ -113,6 +113,8 @@ final class Link: ObservableObject {
 
     @Published var assistant = (savedProfile()["assistant"] as? String) ?? "Nova"     // the name it answers to
     @Published var user = (savedProfile()["user"] as? String) ?? ""
+    @Published var updateVersion = ""      // a newer version is on offer: shown until answered
+    @Published var updateNotes = ""
     @Published var welcome = false         // the first-run questions are on screen
     var welcomeKey: ((NSEvent) -> Bool)?   // the welcome's own handling of arrow keys; true means "that was mine"
     var tabbing = false                    // Tab has been used: Space and Return then press the control the keyboard is on
@@ -266,8 +268,10 @@ final class Link: ObservableObject {
         state = "STARTING"
         let p = Process()
         // The engine sits beside the window inside the app. The helper files it needs are put in the data folder.
-        let engine = Bundle.main.url(forResource: "nova-engine", withExtension: nil) ?? URL(fileURLWithPath: (CommandLine.arguments[0] as NSString).deletingLastPathComponent + "/nova-engine")
-        if let lua = Bundle.main.url(forResource: "talking_piano_bridge", withExtension: "lua"), let code = FileManager.default.contents(atPath: lua.path) {
+        // The engine sits beside this window's code, in the payload folder the app's starter chose.
+        let payload = ProcessInfo.processInfo.environment["NOVA_PAYLOAD"] ?? ((Bundle.main.resourcePath ?? "") + "/payload")
+        let engine = URL(fileURLWithPath: payload + "/nova-engine")
+        if let code = FileManager.default.contents(atPath: payload + "/talking_piano_bridge.lua") {
             try? FileManager.default.createDirectory(atPath: baseDir + "/reaper", withIntermediateDirectories: true)
             if FileManager.default.contents(atPath: baseDir + "/reaper/talking_piano_bridge.lua") != code { FileManager.default.createFile(atPath: baseDir + "/reaper/talking_piano_bridge.lua", contents: code) }
         }
@@ -277,6 +281,7 @@ final class Link: ObservableObject {
         var env = ProcessInfo.processInfo.environment
         env["TP_UI"] = "1"
         env["NOVA_HOME"] = baseDir
+        env["NOVA_PAYLOAD"] = payload
         env["TERM"] = "dumb"
         env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"
         p.environment = env
@@ -483,6 +488,19 @@ final class Link: ObservableObject {
             assistant = parts[0].isEmpty ? "Nova" : parts[0]
             user = parts.count > 1 && parts[1] != "friend" ? parts[1] : ""
         case "welcome": welcome = true; AppDelegate.shared?.showWindow()
+        case "update":
+            let parts = rest.components(separatedBy: "|")
+            updateVersion = parts[0].trimmingCharacters(in: .whitespaces)
+            updateNotes = parts.count > 1 ? parts[1] : ""
+            if !updateVersion.isEmpty { Overlay.shared.show(for: 45) }
+        case "relaunch":
+            // The new version is in place. Start the app afresh, a moment after this copy has gone.
+            stopping = true
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/bin/sh")
+            p.arguments = ["-c", "sleep 1.5; /usr/bin/open -n \"$0\"", Bundle.main.bundlePath]
+            try? p.run()
+            NSApp.terminate(nil)
         case "hands": hands = rest
         case "beat": beat = Int(rest) ?? -1; flash = "beat"; flashAt = Link.clock()
         case "flash": flash = rest; flashAt = Link.clock()
@@ -1751,6 +1769,35 @@ struct FocusRing: ViewModifier {
 }
 extension View { func focusRing() -> some View { modifier(FocusRing()) } }
 
+/// "New update": shown across the top of the window, in the app's own green, until it is answered.
+struct UpdateBanner: View {
+    @ObservedObject var link: Link
+    var body: some View {
+        if !link.updateVersion.isEmpty {
+            HStack(spacing: 18) {
+                Circle().fill(Hud.green).frame(width: 10, height: 10).shadow(color: Hud.green, radius: 8)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("NEW UPDATE  //  VERSION \(link.updateVersion)").font(Hud.mono(16, .bold)).tracking(4).foregroundColor(Hud.green).shadow(color: Hud.green.opacity(0.7), radius: 10)
+                    if !link.updateNotes.isEmpty { Text(link.updateNotes).font(Hud.mono(13)).foregroundColor(Hud.soft).lineLimit(2) }
+                }
+                Spacer()
+                Button(action: { link.send("~update yes\n") }) {
+                    Text("UPDATE NOW").font(Hud.mono(13, .bold)).tracking(3).foregroundColor(.black).padding(.horizontal, 20).padding(.vertical, 11).background(RoundedRectangle(cornerRadius: 10).fill(Hud.green))
+                }.buttonStyle(.plain).focusRing().accessibilityLabel("Update now to version \(link.updateVersion)")
+                Button(action: { link.send("~update no\n") }) {
+                    Text("LATER").font(Hud.mono(13, .bold)).tracking(3).foregroundColor(Hud.soft).padding(.horizontal, 18).padding(.vertical, 11).overlay(RoundedRectangle(cornerRadius: 10).stroke(Hud.green.opacity(0.6), lineWidth: 1.5))
+                }.buttonStyle(.plain).focusRing().accessibilityLabel("Update later")
+            }
+            .padding(.horizontal, 22).padding(.vertical, 14)
+            .background(RoundedRectangle(cornerRadius: 14).fill(Color(red: 0.01, green: 0.06, blue: 0.035)).shadow(color: Hud.green.opacity(0.45), radius: 22))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Hud.green, lineWidth: 1.5))
+            .padding(.horizontal, 24).padding(.top, 14)
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .accessibilityElement(children: .contain)
+        }
+    }
+}
+
 struct HudButton: View {
     let title: String
     let hint: String
@@ -1827,8 +1874,9 @@ struct ContentView: View {
     let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        Group {
+        ZStack(alignment: .top) {
             if link.welcome { WelcomeScreen(link: link) } else if link.visual { VisualiserScreen(link: link) } else { console }
+            VStack { UpdateBanner(link: link); Spacer() }.animation(.easeOut(duration: 0.35), value: link.updateVersion)
         }
         .frame(minWidth: 1120, minHeight: 780)
         .preferredColorScheme(.dark)
@@ -2311,7 +2359,7 @@ struct OverlayView: View {
                 HStack(spacing: 10) {
                     Circle().fill(Hud.green).frame(width: 8, height: 8).shadow(color: Hud.green, radius: 6)
                     Text("\(Link.shared.assistant.uppercased())").font(Hud.mono(13, .bold)).tracking(6).foregroundColor(Hud.green)
-                    Text(link.speaking ? "SPEAKING" : "LISTENING").font(Hud.mono(10, .medium)).tracking(3).foregroundColor(Hud.dim)
+                    Text(!link.updateVersion.isEmpty ? "NEW UPDATE  //  \(link.updateVersion)" : link.speaking ? "SPEAKING" : "LISTENING").font(Hud.mono(!link.updateVersion.isEmpty ? 12 : 10, .bold)).tracking(3).foregroundColor(!link.updateVersion.isEmpty ? Hud.green : Hud.dim)
                     Spacer()
                 }
                 if !link.heard.isEmpty {
@@ -2647,6 +2695,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
             return
         }
+        if CommandLine.arguments.contains("--update") { link.handle("update 1.2.0|Faster answers, and a new voice to choose.") }
         if let i = CommandLine.arguments.firstIndex(of: "--welcome") { link.welcome = true; link.welcomeStepForSnapshot = Int(CommandLine.arguments[safe: i + 1] ?? "") ?? 0 }
         let view = NSHostingView(rootView: ContentView(link: link))
         view.frame = NSRect(x: 0, y: 0, width: 1240, height: 840)
@@ -2695,8 +2744,3 @@ enum Main {
 }
 
 extension Array { subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil } }
-
-@main
-struct NovaEntry {
-    static func main() { Main.main() }
-}

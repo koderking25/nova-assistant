@@ -1,4 +1,4 @@
-// Cloudflare Workers settings: serves the website in the "site" folder.
+// Cloudflare Workers settings: serves the website in the "site" folder at saynova.app.
 // Deploy with:  npx wrangler deploy
 {
   "name": "nova-assistant",
@@ -6,5 +6,10 @@
   "assets": {
     "directory": "./site",
     "not_found_handling": "404-page"
-  }
+  },
+  // The site's own address. Cloudflare sets up the DNS record and the certificate by itself.
+  "routes": [
+    { "pattern": "saynova.app", "custom_domain": true },
+    { "pattern": "www.saynova.app", "custom_domain": true }
+  ]
 }

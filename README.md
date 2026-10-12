@@ -17,15 +17,16 @@ built to be fully usable without looking at the screen.
 - Notes, lists, alarms, reminders, focus sessions, a daily briefing, weather, conversions.
 - With a MIDI keyboard: lessons by ear, a band that plays your ideas back, a jazz course, ear training.
 - Captions for everything said, large text, high contrast, one handed lessons, VoiceOver labels.
-- Optional natural voices (Kokoro), downloaded on request and run on the Mac.
+- Natural voices (Kokoro) by default: fetched in the background on first run, about 400 MB, and run on the Mac.
+- A brain with no setup: the language model built into macOS (Apple Intelligence) works out loose wording and answers questions. Claude Code is used instead when it is installed, which adds web answers.
 
 ## Privacy
 
 Speech recognition is done on the Mac by macOS (Nova refuses to listen if on-device recognition
 is not available). Nothing is acted on unless it follows the wake word, and what is overheard is
 neither shown nor saved. There is no account, server or telemetry. Network requests: the weather
-(wttr.in, city name only), song and video look-ups (the words asked for), and, if you ask for it,
-the natural voice download.
+(wttr.in, city name only), song and video look-ups (the words asked for), and
+the one-time natural voice download (uv, Python packages and the Kokoro model).
 
 ## Build
 
@@ -57,7 +58,8 @@ This makes `dist/Nova.app` and `site/Nova.zip`.
 - English only.
 - Logic Pro control relies on Logic's English menu names.
 - Spotify needs the Spotify desktop app. Finding a song uses an ordinary web search, which can occasionally fail; Nova then opens the search in Spotify instead.
-- Open questions and web answers use Claude Code if it is installed and signed in. Without it, Nova says when it does not understand.
+- Loose wording and open questions need Apple Intelligence (Apple silicon, macOS 26 or later) or Claude Code. Without either, Nova follows the requests its own rules know and says when it does not understand.
+- Answers from the web need Claude Code.
 
 ## Thanks
 

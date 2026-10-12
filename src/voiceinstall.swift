@@ -9,6 +9,10 @@ import Foundation
 
 enum VoiceInstaller {
     static var running = false
+    static var cancelled = false
+    /// The person asked for the Mac's own voice, so the natural one is not fetched by itself.
+    static let declineFile = baseDir.appendingPathComponent("voice-declined.txt")
+    static var declined: Bool { FileManager.default.fileExists(atPath: declineFile.path) }
     static let model = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
     static let voices = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
     static var uvURL: String {
@@ -50,6 +54,7 @@ enum VoiceInstaller {
             guard runTool("/usr/bin/tar", ["-xzf", tar.path, "-C", dir.appendingPathComponent("bin").path, "--strip-components", "1"], timeout: 60).ok, fm.isExecutableFile(atPath: uv.path) else { return "The setup tool wouldn't unpack." }
             try? fm.removeItem(at: tar)
         }
+        if cancelled { return "Cancelled." }
         // 2. Python and the speech package, kept inside Nova's folder.
         let python = dir.appendingPathComponent(".venv/bin/python")
         let env = ["UV_PYTHON_INSTALL_DIR=\(dir.appendingPathComponent("python").path)", "UV_CACHE_DIR=\(dir.appendingPathComponent("uv-cache").path)"]
@@ -64,6 +69,7 @@ enum VoiceInstaller {
             guard got.ok else { return "The speech engine wouldn't install: \(got.out.suffix(120))" }
         }
         try? fm.removeItem(at: dir.appendingPathComponent("uv-cache"))
+        if cancelled { return "Cancelled." }
         // 3. The voices themselves.
         let voicesFile = dir.appendingPathComponent("voices-v1.0.bin"), modelFile = dir.appendingPathComponent("kokoro-v1.0.onnx")
         if !fm.fileExists(atPath: voicesFile.path) {
@@ -84,11 +90,19 @@ extension Engine {
         func reply(_ text: String) { run { g in self.say(text, g); self.resumeAfterHelp(g) } }
         let natural = h.has("natural voice", "natural voices", "better voice", "human voice", "nicer voice", "realistic voice", "real voice", "kokoro", "good voice", "new voice pack", "voice pack", "premium voice")
         guard natural else { return nil }
+        if h.has("cancel", "stop", "dont download", "do not download", "dont install") {
+            VoiceInstaller.cancelled = true
+            if !Opt.fast {
+                try? "declined".write(to: VoiceInstaller.declineFile, atomically: true, encoding: .utf8)
+                _ = runTool("/usr/bin/pkill", ["-f", Kokoro.folder.path], timeout: 5)
+            }
+            reply("Stopped. I'll keep the Mac's own voice. If you change your mind, say install the natural voice."); return "voice cancel"
+        }
         if h.has("remove", "uninstall", "delete", "get rid of") {
             guard Kokoro.installed || FileManager.default.fileExists(atPath: Kokoro.folder.path) else { reply("The natural voice isn't installed."); return "voice remove" }
             pendingConfirm = { [unowned self] in
                 Kokoro.shared.shutDown()
-                if !Opt.fast { try? FileManager.default.removeItem(at: Kokoro.folder) }
+                if !Opt.fast { try? FileManager.default.removeItem(at: Kokoro.folder); try? "declined".write(to: VoiceInstaller.declineFile, atomically: true, encoding: .utf8) }
                 self.run { g in self.say("The natural voice is removed. I'm back to the Mac's own voice after the next restart.", g) }
             }
             pendingUntil = now() + 20
@@ -97,7 +111,7 @@ extension Engine {
         if h.has("install", "download", "get", "add", "set up", "turn on", "i want", "give me", "use", "switch to", "can i have") {
             if Kokoro.installed { reply("The natural voice is already installed. Say next voice to hear the others, or audition the voices."); return "voice have" }
             if VoiceInstaller.running { reply("It's already downloading. I'll tell you the moment it's ready."); return "voice busy" }
-            pendingConfirm = { [unowned self] in self.installVoice() }
+            pendingConfirm = { [unowned self] in try? FileManager.default.removeItem(at: VoiceInstaller.declineFile); self.installVoice() }
             pendingUntil = now() + 25
             reply("The natural voice is a free download of about 400 megabytes, and uses about 600 on your disk. It runs entirely on this Mac. Shall I get it? Say yes or no.")
             return "voice install?"
@@ -106,21 +120,32 @@ extension Engine {
         return "voice status"
     }
 
-    func installVoice() {
+    /// Called when the welcome is finished, and at every start after that: if the natural voice
+    /// is not there yet and the person has not chosen the Mac's voice, it is fetched in the background.
+    func fetchVoiceIfWanted(announce: Bool) {
+        guard !Opt.fast, !Opt.textMode, !Kokoro.installed, !VoiceInstaller.running, !VoiceInstaller.declined else { return }
+        installVoice(quiet: true, opening: announce ? "I'm fetching my natural voice in the background. It's a one time download, and I'll switch to it the moment it's ready." : nil)
+    }
+
+    func installVoice(quiet: Bool = false, opening: String? = "Starting now. Carry on with whatever you like. I'll tell you when each step is done.") {
         if Opt.fast { run { g in self.say("Installing.", g) }; return }
         VoiceInstaller.running = true
-        run { g in self.say("Starting now. Carry on with whatever you like. I'll tell you when each step is done.", g) }
+        VoiceInstaller.cancelled = false
+        if let line = opening { DispatchQueue.global().async { while self.lastSpokenAt > now() { usleep(200_000) }; self.speaker.say(line) } }
         DispatchQueue.global(qos: .utility).async {
             let problem = VoiceInstaller.install { step in
-                ui("now Installing the natural voice")
+                ui("now Fetching the natural voice")
+                if quiet { return }
                 while self.lastSpokenAt > now() { usleep(200_000) }
                 self.speaker.say(step)
             }
+            if VoiceInstaller.cancelled { VoiceInstaller.running = false; return }
             VoiceInstaller.running = false
             while self.lastSpokenAt > now() { usleep(200_000) }
             if let p = problem {
                 self.noteMistake("the natural voice did not install", p)
-                self.speaker.say(p)
+                // When it was fetching by itself, a failure is not announced: it simply tries again next time.
+                if !quiet { self.speaker.say(p) }
                 return
             }
             Kokoro.shared.start()

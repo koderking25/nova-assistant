@@ -108,8 +108,8 @@ let moodWords: [String: [String]] = [
 struct AppEntry { let name: String; let path: String }
 
 let appAliases: [(say: [String], app: String)] = [
-    (["google chrome", "chrome", "google", "the browser", "my browser", "the internet", "the web"], "Google Chrome"), (["logic pro", "logic"], "Logic Pro"), (["reaper"], "REAPER"),
-    (["microsoft word", "word"], "Microsoft Word"), (["excel", "spreadsheet"], "Microsoft Excel"), (["powerpoint", "power point"], "Microsoft PowerPoint"),
+    (["google chrome", "chrome", "google"], "Google Chrome"), (["logic pro", "logic"], "Logic Pro"), (["reaper"], "REAPER"),
+    (["my email", "my mail", "the mail app", "email"], "Mail"), (["microsoft word", "word"], "Microsoft Word"), (["excel", "spreadsheet"], "Microsoft Excel"), (["powerpoint", "power point"], "Microsoft PowerPoint"),
     (["outlook"], "Microsoft Outlook"), (["teams"], "Microsoft Teams"), (["one note", "onenote"], "Microsoft OneNote"), (["vs code", "visual studio", "code editor"], "Visual Studio Code"),
     (["system settings", "settings", "preferences", "system preferences"], "System Settings"), (["messages", "imessage", "my texts", "texts"], "Messages"), (["face time", "facetime"], "FaceTime"),
     (["apple music", "music app", "the music app"], "Music"), (["voice memos", "voice memo"], "VoiceMemos"), (["app store"], "App Store"), (["activity monitor"], "Activity Monitor"),
@@ -118,7 +118,8 @@ let appAliases: [(say: [String], app: String)] = [
 ]
 
 let websites: [(say: [String], url: String, name: String)] = [
-    (["youtube", "you tube"], "https://www.youtube.com", "YouTube"), (["gmail", "g mail", "my email", "my mail"], "https://mail.google.com", "Gmail"),
+    (["youtube", "you tube"], "https://www.youtube.com", "YouTube"), (["gmail", "g mail"], "https://mail.google.com", "Gmail"),
+    (["the browser", "my browser", "web browser", "the internet", "the web"], "https://www.google.com", "your browser"),
     (["google classroom", "classroom"], "https://classroom.google.com", "Google Classroom"), (["google docs", "docs"], "https://docs.google.com", "Google Docs"),
     (["google drive", "my drive"], "https://drive.google.com", "Google Drive"), (["netflix"], "https://www.netflix.com", "Netflix"), (["wikipedia"], "https://www.wikipedia.org", "Wikipedia"),
     (["google maps"], "https://maps.google.com", "Google Maps"), (["google calendar"], "https://calendar.google.com", "Google Calendar"),
@@ -468,7 +469,7 @@ func looseSelfTest(_ engine: Engine, _ check: (String, Bool, String) -> Void) {
 
     let apps = ["open reaper": "app REAPER", "launch logic": "app Logic Pro", "can you fire up google": "app Google Chrome", "open spotify please": "app Spotify",
                 "bring up system settings": "app System Settings", "open youtube": "site YouTube", "search google for jazz piano voicings": "search jazz piano voicings",
-                "open microsoft word": "app Microsoft Word", "pull up my email": "site Gmail", "open flibbertigibbet": "no app", "quit spotify": "quit? Spotify"]
+                "open microsoft word": "app Microsoft Word", "pull up my email": "app Mail", "open flibbertigibbet": "no app", "quit spotify": "quit? Spotify"]
     var appWrong: [String] = []
     for (said, want) in apps {
         engine.pendingConfirm = nil

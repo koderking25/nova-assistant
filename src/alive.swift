@@ -33,7 +33,8 @@ func runTool(_ path: String, _ args: [String], input: String? = nil, timeout: Do
 // player's own Claude account. Nothing is sent anywhere unless a question is asked.
 enum AI {
     static let paths = ["/opt/homebrew/bin/claude", NSHomeDirectory() + "/.local/bin/claude", "/usr/local/bin/claude"]
-    static var path: String? { paths.first { FileManager.default.isExecutableFile(atPath: $0) } }
+    // (NOVA_AI=local makes it behave as on a Mac without Claude Code, for checking the built-in model.)
+    static var path: String? { ProcessInfo.processInfo.environment["NOVA_AI"] == "local" ? nil : paths.first { FileManager.default.isExecutableFile(atPath: $0) } }
     static var persona: String { """
     You are \(Me.name), the voice of a music assistant for \(You.name). \(Profile.current.about.isEmpty ? "" : "About them: " + Profile.current.about + ".") Your words are spoken aloud. Answer in plain sentences with no lists, symbols, markdown or emoji. Keep to \
     two or three short sentences unless asked for more. Be warm, direct and specific, like a good teacher who is also a \
@@ -55,7 +56,10 @@ enum AI {
 
     // Returns the answer, or a sentence explaining what the player needs to do.
     static func ask(_ question: String, context: String) -> String {
-        guard let path = path else { return "The AI needs the Claude command line tool, and I cannot find it on this Mac." }
+        if path == nil || AISession.shared.signedOut, let local = LocalAI.ask(question, instructions: persona + "\n\nWhat you know right now:\n" + context) {
+            return local.replacingOccurrences(of: "*", with: "").replacingOccurrences(of: "#", with: "")
+        }
+        guard let path = path else { return "The AI is not signed in yet." }
         let dir = NSTemporaryDirectory() + "talking-piano-ai"
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         let r = runTool(path, ["-p", "--model", "haiku", "--system-prompt", persona + "\n\nWhat you know right now:\n" + context,
@@ -299,7 +303,7 @@ extension Engine {
             if answer.hasPrefix("The AI is not signed in") {
                 // Say how to sign in once; after that, just admit the sentence was not understood.
                 answer = self.warnedNoAI ? pick(["Sorry, I didn't catch what you wanted there.", "I'm not sure what you meant. Say it another way?"])
-                    : "I didn't recognise that one. Open questions need Claude Code, which is optional: if you install it and sign in, I'll use it. Say \(Me.name), what can you do, to hear what works without it."
+                    : "I didn't recognise that one. On this Mac I can only follow requests I know, because it has no built-in language model: that needs Apple Intelligence switched on, in System Settings. Say \(Me.name), what can you do, to hear what I understand."
                 self.warnedNoAI = true
             }
             // The AI may name one of the things the app can do. Then it is done, not talked about.

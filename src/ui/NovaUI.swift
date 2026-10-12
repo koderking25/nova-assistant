@@ -1998,6 +1998,7 @@ struct WelcomeScreen: View {
     @State private var plays = true
     @State private var shown = 0
     @State private var listen = true
+    @State private var natural = true
     @FocusState private var typing: Bool
     static let names = ["Nova", "Aria", "Luna", "Atlas", "Orion"]
     static let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -2037,7 +2038,7 @@ struct WelcomeScreen: View {
         if reader { about.append("uses a screen reader, so never rely on anything visual") }
         if plays { about.append("plays piano or makes music") }
         func clean(_ t: String) -> String { t.replacingOccurrences(of: "|", with: " ").replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces) }
-        link.send("~setup \(clean(name))|\(chosen)|\(clean(city))|\(fahrenheit ? "F" : "C")|\(about.joined(separator: "; "))|\(plays ? 1 : 0)|\(month > 0 ? String(format: "%02d-%02d", month, day) : "")\n")
+        link.send("~setup \(clean(name))|\(chosen)|\(clean(city))|\(fahrenheit ? "F" : "C")|\(about.joined(separator: "; "))|\(plays ? 1 : 0)|\(month > 0 ? String(format: "%02d-%02d", month, day) : "")|\(natural ? 1 : 0)\n")
         link.assistant = chosen
         link.user = clean(name)
         link.welcome = false
@@ -2126,9 +2127,13 @@ struct WelcomeScreen: View {
             }
             .frame(maxWidth: 640)
         case 6:
-            HStack(spacing: 14) {
-                choice("YES, LISTEN FOR \(chosen.uppercased())", listen) { listen = true }
-                choice("NOT NOW", !listen) { listen = false }
+            VStack(spacing: 24) {
+                HStack(spacing: 14) {
+                    choice("YES, LISTEN FOR \(chosen.uppercased())", listen) { listen = true }
+                    choice("NOT NOW", !listen) { listen = false }
+                }
+                toggle("Give me my natural voice", "A free, one time download of about 400 megabytes, fetched in the background. It runs on this Mac and sounds far more human.", $natural)
+                    .frame(maxWidth: 640)
             }
         default: EmptyView()
         }

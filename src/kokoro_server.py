@@ -13,6 +13,29 @@ def main():
     try:
         import numpy as np
         from kokoro_onnx import Kokoro
+        # The speech rules (espeak-ng) are told where their data is by naming the folder that holds
+        # a folder called "espeak-ng-data". Given the long path inside the Python packages, they
+        # fail on some Macs (a path over about 160 characters is cut short), and then nothing can be
+        # spoken. So a short folder is made in /tmp with a link to the data, and that is named instead.
+        espeak = None
+        try:
+            import os, tempfile, hashlib
+            import espeakng_loader
+            from kokoro_onnx.config import EspeakConfig
+            data = espeakng_loader.get_data_path()
+            home = os.path.join("/tmp" if os.path.isdir("/tmp") else tempfile.gettempdir(), "nova-espeak-" + hashlib.md5(data.encode()).hexdigest()[:10])
+            link = os.path.join(home, "espeak-ng-data")
+            if os.path.islink(home) or os.path.isfile(home):
+                os.remove(home)
+            os.makedirs(home, exist_ok=True)
+            if os.path.islink(link) and os.readlink(link) != data:
+                os.remove(link)
+            if not os.path.exists(link):
+                os.symlink(data, link)
+            if os.path.exists(os.path.join(link, "phontab")):
+                espeak = EspeakConfig(lib_path=espeakng_loader.get_library_path(), data_path=home)
+        except Exception:
+            espeak = None
         try:
             # Four threads, one per fast core of the Mac. Left to itself the engine spreads
             # over the slow cores as well, which was measured to take about twice as long.
@@ -20,9 +43,9 @@ def main():
             options = ort.SessionOptions()
             options.intra_op_num_threads = 4
             session = ort.InferenceSession(folder + "/kokoro-v1.0.onnx", sess_options=options, providers=["CPUExecutionProvider"])
-            kokoro = Kokoro.from_session(session, folder + "/voices-v1.0.bin")
+            kokoro = Kokoro.from_session(session, folder + "/voices-v1.0.bin", espeak_config=espeak)
         except Exception:
-            kokoro = Kokoro(folder + "/kokoro-v1.0.onnx", folder + "/voices-v1.0.bin")
+            kokoro = Kokoro(folder + "/kokoro-v1.0.onnx", folder + "/voices-v1.0.bin", espeak_config=espeak)
         voices = sorted(kokoro.get_voices())
     except Exception as e:  # the tool falls back to the Mac's own voice
         print("failed\t" + str(e).replace("\n", " "), flush=True)

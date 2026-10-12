@@ -17,7 +17,10 @@ final class AISession {
     private var answer = ""
     private var turns = 0
     private(set) var signedOut = false
-    var ready: Bool { lock.lock(); defer { lock.unlock() }; return process?.isRunning == true && !signedOut }
+    /// Claude Code, when it is installed and signed in, is used first: it can search the web.
+    /// Otherwise the model built into macOS is used, if this Mac has one.
+    var usingLocal: Bool { (AI.path == nil || signedOut) && LocalAI.available }
+    var ready: Bool { lock.lock(); defer { lock.unlock() }; return (process?.isRunning == true && !signedOut) || usingLocal }
 
     static var persona: String { """
     You are \(Me.name), \(You.name)'s personal assistant on their Mac, with a gift for music. \(Profile.current.about.isEmpty ? "" : "About them: " + Profile.current.about + ".") \
@@ -67,6 +70,7 @@ final class AISession {
 
     func start() {
         lock.lock(); defer { lock.unlock() }
+        if AI.path == nil { LocalAI.prewarm(); return }
         guard process?.isRunning != true, !signedOut, let path = AI.path else { return }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: path)
@@ -109,6 +113,22 @@ final class AISession {
 
     /// One turn of the conversation. Returns nil if the AI could not answer.
     func ask(_ question: String, state: String) -> String? {
+        if usingLocal {
+            let got = LocalAI.ask("They say: \(question)", instructions: LocalAI.persona) ?? ""
+            var clean = got.replacingOccurrences(of: "*", with: "").replacingOccurrences(of: "#", with: "").replacingOccurrences(of: "\u{2014}", with: ", ").replacingOccurrences(of: "You reply:", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+            // A command line is kept on its own; one with a blank left unfilled is no use to anyone.
+            if let r = clean.range(of: "DO:") {
+                clean = "DO:" + clean[r.upperBound...].components(separatedBy: "\n")[0]
+                let blanks = ["NAME", "APP", "WORDS", "TIME", "NUMBER", "THING", "MOOD", "SONG", "BUTTON", "WHAT TO DO", "<", ">"]
+                if blanks.contains(where: { clean.contains($0) }) { return "Sorry, I didn't quite follow. Could you say that another way?" }
+            }
+            // The small model sometimes gives the command without its "DO:". A reply that is exactly a command is one.
+            let bare = clean.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: " .!"))
+            if ["talk slower", "talk faster", "pause", "next song", "stop", "help", "brief me", "full screen", "next voice", "read my notes", "open the visualizer", "go to the background", "ear training",
+                "song menu", "new composition", "keep that", "read the window", "where am i", "what time is it", "what is the weather", "what is the weather tomorrow", "what did i just play",
+                "play it back with the band", "make it a lullaby", "what is in my downloads", "what is on my shopping list"].contains(bare) { return "DO: " + bare }
+            return clean.isEmpty ? nil : clean
+        }
         start()
         lock.lock()
         guard let input = input, process?.isRunning == true else { lock.unlock(); return nil }

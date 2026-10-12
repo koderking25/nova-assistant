@@ -502,12 +502,14 @@ extension Engine {
             Profile.current.about = f[4].trimmingCharacters(in: .whitespaces)
             Profile.current.plays = f[5] == "1"
             Profile.current.birthday = f.count > 6 && f[6].count == 5 ? f[6] : ""
+            // The natural voice is the default. It is only left out if the welcome's switch was turned off.
+            if f.count > 7, f[7] == "0" { try? "declined".write(to: VoiceInstaller.declineFile, atomically: true, encoding: .utf8) } else { try? FileManager.default.removeItem(at: VoiceInstaller.declineFile) }
             Profile.current.done = true
             Profile.save()
             Weather.latest = nil; Weather.refresh()
             ui("name \(Me.name)|\(You.name)")
             sendVocabulary()
-            run { g in self.say("All set\(Profile.current.user.isEmpty ? "" : ", \(You.name)"). I'm \(Me.name). Whenever you need me, say \(Me.name), then what you'd like. Try: \(Me.name), what can you do?" + (Kokoro.installed ? "" : " One more thing. I can sound far more natural than this. Whenever you like, say: \(Me.name), install the natural voice."), g) }
+            run { g in self.say("All set\(Profile.current.user.isEmpty ? "" : ", \(You.name)"). I'm \(Me.name). Whenever you need me, say \(Me.name), then what you'd like. Try: \(Me.name), what can you do?", g); self.fetchVoiceIfWanted(announce: true) }
             return
         }
         if text.hasPrefix("lvl ") { ears.level(Double(text.dropFirst(4)) ?? 0, engine: self); return }   // how loud the microphone is, several times a second

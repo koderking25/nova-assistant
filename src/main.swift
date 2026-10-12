@@ -1848,6 +1848,13 @@ if args.contains("--sound-check") {
     print("after being stopped, a note started it again: \(s.engine.isRunning ? "yes" : "no")")
     exit(0)
 }
+if args.contains("--install-voice") {
+    // Runs the natural voice download exactly as the app does, printing each step. For checking it end to end.
+    let t = now()
+    let problem = VoiceInstaller.install { print(String(format: "%5.0f s  %@", now() - t, $0)) }
+    print(String(format: "%5.0f s  %@", now() - t, problem ?? "installed"))
+    exit(problem == nil ? 0 : 1)
+}
 if args.contains("--library") {
     // Prints one line per song, for checking the library without starting the tool.
     for s in loadLibrary() {
@@ -1861,7 +1868,7 @@ if args.contains("--library") {
 }
 // Checks run from the command line must never disturb the copy the player is using, and a check
 // given too few arguments must stop here, not carry on and start up as a second the assistant.
-let checkFlags = ["--selftest", "--route", "--chat", "--lookup", "--reband", "--speak", "--ask", "--library", "--daw-test", "--reaper-test", "--new-logic-project", "--mute", "--cold", "--reaper", "--sound-check"]
+let checkFlags = ["--selftest", "--route", "--chat", "--lookup", "--reband", "--speak", "--ask", "--library", "--daw-test", "--reaper-test", "--new-logic-project", "--mute", "--cold", "--reaper", "--sound-check", "--install-voice"]
 let isCheck = args.contains { checkFlags.contains($0) }
 if !isCheck, instanceLock >= 0 { becomeOnlyCopy() }
 let midi = MidiIO()
@@ -2123,6 +2130,7 @@ if !Profile.current.done {
     // First time: the welcome screens do the talking. Nothing is said until they have been through.
     ui("welcome 1")
 } else {
+    engine.fetchVoiceIfWanted(announce: false)        // an interrupted download carries on quietly
     let parts = engine.greetingParts()
     let learnTop = engine.awaitingTop
     engine.run { g in

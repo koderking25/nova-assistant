@@ -114,6 +114,8 @@ final class Link: ObservableObject {
     @Published var assistant = (savedProfile()["assistant"] as? String) ?? "Nova"     // the name it answers to
     @Published var user = (savedProfile()["user"] as? String) ?? ""
     @Published var welcome = false         // the first-run questions are on screen
+    var welcomeKey: ((NSEvent) -> Bool)?   // the welcome's own handling of arrow keys; true means "that was mine"
+    var tabbing = false                    // Tab has been used: Space and Return then press the control the keyboard is on
     var welcomeStepForSnapshot = 0
     @Published var caption = ""
     @Published var spokenTo = 0            // how far into the caption the voice has got (UTF-16 units)
@@ -1016,7 +1018,7 @@ struct CommandButton: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plain).focusRing()
         .onHover { hover = $0 }
         .accessibilityLabel(text)
         .accessibilityHint("Key: \(command.key)")
@@ -1739,6 +1741,16 @@ struct Visualiser: NSViewRepresentable {
     static func dismantleNSView(_ view: SKView, coordinator: ()) { view.presentScene(nil) }
 }
 
+/// A clear white outline around whichever control the keyboard is on. The app's own buttons are
+/// drawn by hand, so without this there would be no sign of where Tab has got to.
+struct FocusRing: ViewModifier {
+    @FocusState private var on: Bool
+    func body(content: Content) -> some View {
+        content.focused($on).overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white, lineWidth: on ? 3 : 0).padding(-4))
+    }
+}
+extension View { func focusRing() -> some View { modifier(FocusRing()) } }
+
 struct HudButton: View {
     let title: String
     let hint: String
@@ -1750,7 +1762,7 @@ struct HudButton: View {
                 .background(Hud.bg.opacity(0.6))
                 .overlay(Rectangle().stroke(Hud.green.opacity(0.7), lineWidth: 1))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plain).focusRing()
         .accessibilityLabel(hint)
     }
 }
@@ -1919,7 +1931,7 @@ struct ContentView: View {
                         .foregroundColor(Hud.bg).frame(maxWidth: .infinity).padding(.vertical, 7)
                         .background(Hud.green)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.plain).focusRing()
             }
         }
     }
@@ -2019,9 +2031,57 @@ struct WelcomeScreen: View {
          ("One last thing: may I listen?", "To hear you say \u{201C}\(chosen)\u{201D}, I need the microphone. The listening happens on this Mac, and I only act on what follows my name.")]
     }
 
+    /// Arrow keys choose among the answers on each screen, so nothing here needs a mouse.
+    private func key(_ e: NSEvent) -> Bool {
+        let left = e.keyCode == 123, right = e.keyCode == 124, down = e.keyCode == 125, up = e.keyCode == 126
+        guard left || right || up || down else { return false }
+        switch step {
+        case 2:
+            guard custom.isEmpty, left || right else { return false }
+            let i = WelcomeScreen.names.firstIndex(of: wake) ?? 0
+            wake = WelcomeScreen.names[(i + (right ? 1 : WelcomeScreen.names.count - 1)) % WelcomeScreen.names.count]
+            announce(wake)
+        case 3:
+            guard up || down else { return false }
+            fahrenheit.toggle(); announce(fahrenheit ? "Fahrenheit" : "Celsius")
+        case 4:
+            if left || right { month = right ? (month % 12) + 1 : (month <= 1 ? 12 : month - 1) }
+            else { if month == 0 { month = 1 }; day = up ? (day % 31) + 1 : (day <= 1 ? 31 : day - 1) }
+            announce("\(WelcomeScreen.monthNames[month - 1]) \(day)")
+        case 6:
+            if left || right { listen.toggle(); announce(listen ? "Yes, listen" : "Not now") }
+            else { natural.toggle(); announce("Natural voice " + (natural ? "on" : "off")) }
+        default: return false
+        }
+        return true
+    }
+
+    /// Said by VoiceOver, when it is running.
+    private func announce(_ text: String) {
+        guard NSWorkspace.shared.isVoiceOverEnabled, let w = NSApp.mainWindow ?? NSApp.windows.first else { return }
+        NSAccessibility.post(element: w, notification: .announcementRequested, userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+    }
+
+    private var hint: String {
+        switch step {
+        case 2: return "Left and right arrows choose. Return continues."
+        case 3: return "Up and down arrows switch between Celsius and Fahrenheit."
+        case 4: return "Left and right arrows choose the month, up and down the day."
+        case 5: return "Tab moves between these. Space switches one on or off."
+        case 6: return "Left and right arrows choose. Up and down switch the natural voice."
+        default: return "Return continues."
+        }
+    }
+
     private func say() {
         let q = questions[step]
         shown = 0
+        // With VoiceOver running, VoiceOver reads the question. Nova saying it as well would be two voices at once.
+        if NSWorkspace.shared.isVoiceOverEnabled {
+            announce(q.title + " " + q.sub + " " + hint)
+            typing = step == 1 || step == 3
+            return
+        }
         link.send("~speak " + (q.title + " " + q.sub).replacingOccurrences(of: "\u{201C}", with: "").replacingOccurrences(of: "\u{201D}", with: "").replacingOccurrences(of: "\n", with: " ") + "\n")
         typing = step == 1 || step == 3
     }
@@ -2065,7 +2125,7 @@ struct WelcomeScreen: View {
                                 .background(RoundedRectangle(cornerRadius: 14).fill(chosen == n ? Hud.green : Hud.panel))
                                 .overlay(RoundedRectangle(cornerRadius: 14).stroke(Hud.green.opacity(chosen == n ? 1 : 0.35), lineWidth: 1.5))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.plain).focusRing()
                         .accessibilityLabel(n + (chosen == n ? ", chosen" : ""))
                     }
                 }
@@ -2103,18 +2163,18 @@ struct WelcomeScreen: View {
                                 .background(RoundedRectangle(cornerRadius: 12).fill(month == m ? Hud.green : Hud.panel))
                                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(Hud.green.opacity(month == m ? 1 : 0.35), lineWidth: 1.5))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.plain).focusRing()
                         .accessibilityLabel(WelcomeScreen.monthNames[m - 1] + (month == m ? ", chosen" : ""))
                     }
                 }
                 HStack(spacing: 18) {
                     Button(action: { day = day > 1 ? day - 1 : 31 }) { Text("\u{2212}").font(Hud.mono(26, .bold)).foregroundColor(Hud.soft).frame(width: 56, height: 50).background(RoundedRectangle(cornerRadius: 12).fill(Hud.panel)) }
-                        .buttonStyle(.plain).accessibilityLabel("Day before")
+                        .buttonStyle(.plain).focusRing().accessibilityLabel("Day before")
                     Text(month == 0 ? "PICK A MONTH" : "\(WelcomeScreen.monthNames[month - 1]) \(day)")
                         .font(.system(size: 26, weight: .semibold, design: .monospaced)).foregroundColor(month == 0 ? Hud.dim : .white).frame(minWidth: 280)
                         .accessibilityLabel(month == 0 ? "No birthday chosen" : "\(WelcomeScreen.monthNames[month - 1]) \(day)")
                     Button(action: { day = day < 31 ? day + 1 : 1 }) { Text("+").font(Hud.mono(26, .bold)).foregroundColor(Hud.soft).frame(width: 56, height: 50).background(RoundedRectangle(cornerRadius: 12).fill(Hud.panel)) }
-                        .buttonStyle(.plain).accessibilityLabel("Day after")
+                        .buttonStyle(.plain).focusRing().accessibilityLabel("Day after")
                 }
                 .opacity(month == 0 ? 0.55 : 1)
             }
@@ -2147,7 +2207,7 @@ struct WelcomeScreen: View {
                 .background(RoundedRectangle(cornerRadius: 14).fill(on ? Hud.green : Hud.panel))
                 .overlay(RoundedRectangle(cornerRadius: 14).stroke(Hud.green.opacity(on ? 1 : 0.35), lineWidth: 1.5))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plain).focusRing()
         .accessibilityLabel(title.capitalized + (on ? ", chosen" : ""))
     }
 
@@ -2160,14 +2220,14 @@ struct WelcomeScreen: View {
                 }
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title).font(.system(size: 20, weight: .semibold, design: .monospaced)).foregroundColor(.white)
-                    Text(sub).font(Hud.mono(13)).foregroundColor(Hud.dim)
+                    Text(sub).font(Hud.mono(13.5)).foregroundColor(Hud.soft.opacity(0.85))
                 }
                 Spacer()
             }
             .padding(.horizontal, 18).padding(.vertical, 12)
             .background(RoundedRectangle(cornerRadius: 14).fill(Hud.panel.opacity(value.wrappedValue ? 1 : 0.5)))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plain).focusRing()
         .accessibilityLabel(title + ". " + sub)
         .accessibilityValue(value.wrappedValue ? "on" : "off")
     }
@@ -2190,11 +2250,13 @@ struct WelcomeScreen: View {
                     .animation(.easeOut(duration: 0.5), value: shown >= q.title.count)
                 Spacer(minLength: 18)
                 answer.opacity(shown >= q.title.count ? 1 : 0).animation(.easeOut(duration: 0.4), value: shown >= q.title.count)
-                Spacer(minLength: 18)
+                Text(hint).font(Hud.mono(13)).foregroundColor(Hud.soft.opacity(0.75)).padding(.top, 14)
+                    .opacity(shown >= q.title.count && step > 0 ? 1 : 0)
+                Spacer(minLength: 14)
                 HStack(spacing: 16) {
                     if step > 0 {
                         Button(action: { step -= 1; say() }) { Text("BACK").font(Hud.mono(14, .semibold)).tracking(3).foregroundColor(Hud.soft).padding(.horizontal, 18).padding(.vertical, 12) }
-                            .buttonStyle(.plain).accessibilityLabel("Back to the question before")
+                            .buttonStyle(.plain).focusRing().accessibilityLabel("Back to the question before")
                     }
                     Button(action: next) {
                         Text(step == 0 ? "BEGIN" : step == questions.count - 1 ? "FINISH" : "CONTINUE")
@@ -2203,11 +2265,11 @@ struct WelcomeScreen: View {
                             .background(RoundedRectangle(cornerRadius: 16).fill(Hud.green))
                             .shadow(color: Hud.green.opacity(0.5), radius: 16)
                     }
-                    .buttonStyle(.plain).keyboardShortcut(.defaultAction)
+                    .buttonStyle(.plain).focusRing().keyboardShortcut(.defaultAction)
                     .accessibilityLabel(step == 0 ? "Begin" : step == questions.count - 1 ? "Finish" : "Continue")
                     if step > 0, step < questions.count - 1 {
                         Button(action: next) { Text("SKIP").font(Hud.mono(14, .semibold)).tracking(3).foregroundColor(Hud.soft).padding(.horizontal, 18).padding(.vertical, 12) }
-                            .buttonStyle(.plain).accessibilityLabel("Skip this question")
+                            .buttonStyle(.plain).focusRing().accessibilityLabel("Skip this question")
                     }
                 }
                 HStack(spacing: 10) {
@@ -2221,6 +2283,7 @@ struct WelcomeScreen: View {
             .padding(.horizontal, 40)
         }
         .onAppear {
+            link.welcomeKey = { e in key(e) }
             if link.welcomeStepForSnapshot > 0 { var t = Transaction(); t.disablesAnimations = true; withTransaction(t) { step = link.welcomeStepForSnapshot; shown = 99 } }
             if let n = savedProfile()["user"] as? String { name = n }
             if let c = savedProfile()["city"] as? String { city = c }
@@ -2450,7 +2513,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) { return event }
             let link = Link.shared
-            if link.welcome { return event }
+            if link.welcome { return link.welcomeKey?(event) == true ? nil : event }
+            // Moving about with Tab: from then on Space and Return press the focused button, as anywhere
+            // else on the Mac, until Escape hands those two keys back to the piano commands.
+            if event.keyCode == 48 { link.tabbing = true; return event }
+            if link.tabbing {
+                if event.keyCode == 53 { link.tabbing = false; AppDelegate.shared?.window.makeFirstResponder(nil); return nil }
+                if event.keyCode == 49 || event.keyCode == 36 || event.keyCode == 76 { return event }
+            }
             if !link.typing {
                 if event.keyCode == 53, link.visual { link.visual = false; return nil }        // Escape
                 if event.charactersIgnoringModifiers?.lowercased() == "f" { link.visual.toggle(); return nil }

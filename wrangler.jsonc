@@ -1,0 +1,10 @@
+// Cloudflare Workers settings: serves the website in the "site" folder.
+// Deploy with:  npx wrangler deploy
+{
+  "name": "nova-assistant",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./site",
+    "not_found_handling": "404-page"
+  }
+}

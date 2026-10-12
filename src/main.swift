@@ -1974,6 +1974,9 @@ func quit(_ reason: String = "Q pressed", code: Int32 = 0) -> Never {
     Kokoro.shared.shutDown()
     AISession.shared.shutDown()
     logLine("stopped: \(reason)")
+    // Leaving must never hang, whatever the audio system is doing: if a tidy exit has not
+    // happened within a second and a half, the program is simply ended.
+    DispatchQueue.global().asyncAfter(deadline: .now() + 1.5) { _exit(code) }
     midi.allOff()
     engine.speaker.silenceNow()
     usleep(80_000)
@@ -2100,8 +2103,11 @@ ui("name \(Me.name)|\(You.name)")
 ui("bandlevel \(Sounds.gainDB >= 0 ? "+" : "")\(Int(Sounds.gainDB)) dB")
 let found = midi.keyboards.isEmpty ? "No piano found yet. Plug it in and I will pick it up." : "Piano connected."
 // Built-in band instruments, and a check every few seconds for whether Logic is open.
-sounds.start()
+// Started off to one side. If the Mac's audio system is slow to answer, or stuck (it can be, when
+// another music program is holding the audio interface), the assistant still starts, listens
+// and shows its window; the instruments simply join when the audio system lets them in.
 midi.sounds = sounds
+DispatchQueue.global(qos: .userInitiated).async { sounds.start() }
 var dawTold = false
 func checkLogic() {
     let p = Process()

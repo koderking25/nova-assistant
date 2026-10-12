@@ -40,3 +40,18 @@ Its false wake-ups came from "Innovate" and "Lava".
 
 For Apple's recogniser: `open -n Nova.app --args --wake-dir <set folder> <out.txt> Nova`, then score
 each condition with `nova-engine --wake-score <file> Nova`.
+
+## Training a custom model (experimental)
+
+`train/nova_wake_word.ipynb` is a Google Colab notebook, adapted from openWakeWord's own, that trains
+"hey nova" and "nova". It needs a Linux machine with a GPU and about 20 GB of public datasets, which is
+why it is not run on a Mac. It uses only synthetic speech: no personal recordings.
+
+Open it at
+https://colab.research.google.com/github/koderking25/nova-assistant/blob/main/eval/train/nova_wake_word.ipynb
+
+Score the result on the test set with:
+
+    python oww_custom.py set-nova 0.5 models/hey_nova.onnx models/nova.onnx
+
+Nothing here is used by the app. The app's wake-word system is unchanged.

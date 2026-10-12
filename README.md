@@ -4,7 +4,7 @@ A free, open source voice assistant for the Mac. Say its name and it opens apps 
 inside them, plays music, answers questions, keeps notes and lists, and teaches piano. It is
 built to be fully usable without looking at the screen.
 
-- **Download:** `site/Nova.zip` (macOS 13 or later, Apple silicon and Intel).
+- **Download:** https://saynova.app (macOS 13 or later, Apple silicon and Intel).
 - **Website:** `site/index.html`.
 - **Licence:** MIT.
 
@@ -34,8 +34,21 @@ You need the Xcode command line tools (`xcode-select --install`).
 
     ./build.sh
 
-This makes `dist/Nova.app`, and for the website `site/Nova.zip` (the download), `site/payload.zip` and
+This makes `dist/Nova.app`, and for the website `site/Nova.dmg` (the download), `site/payload.zip` and
 `site/version.json` (what installed copies read to update themselves).
+
+## Signing with an Apple Developer ID
+
+Without one, the build is signed "ad hoc" and macOS warns people the first time they open it.
+With a Developer ID certificate in the keychain:
+
+    xcrun notarytool store-credentials nova-notary     # once: saves your Apple ID, team and app-specific password
+    export NOVA_SIGN="Developer ID Application: Your Name (TEAMID)"
+    export NOVA_NOTARY="nova-notary"
+    ./build.sh
+
+The build then signs everything with the hardened runtime, sends the disk image to Apple to be
+checked, and staples the result to it.
 
 ## Releasing an update
 

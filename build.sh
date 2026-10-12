@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Builds Nova for Apple silicon and Intel Macs (macOS 13 or later), and everything the website serves:
 #   dist/Nova.app       the app
-#   site/Nova.zip       the download
+#   site/Nova.dmg       the download: a disk image with a drag-to-Applications window
 #   site/payload.zip    what an installed Nova fetches to update itself
 #   site/version.json   what an installed Nova reads to learn there is an update
 #
@@ -67,11 +67,71 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict></plist>
 PLIST
-codesign --force --deep --sign - "$app" >/dev/null 2>&1
+# Signing. With an Apple Developer ID (set NOVA_SIGN to its name, for example
+#   export NOVA_SIGN="Developer ID Application: Your Name (TEAMID)"
+# and NOVA_NOTARY to a notarytool keychain profile), the app is signed properly, sent to Apple to be
+# checked, and stamped, so nobody is warned when they open it. Without one it is signed "ad hoc".
+if [[ -n "$NOVA_SIGN" ]]; then
+  cat > "$work/entitlements.plist" <<'ENT'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>com.apple.security.device.audio-input</key><true/>
+<key>com.apple.security.automation.apple-events</key><true/>
+</dict></plist>
+ENT
+  # Everything is signed by the same developer, so the starter may load the window's code from the Library.
+  codesign --force --options runtime --timestamp --sign "$NOVA_SIGN" "$payload/libNovaUI.dylib"
+  codesign --force --options runtime --timestamp --entitlements "$work/entitlements.plist" --sign "$NOVA_SIGN" "$payload/nova-engine"
+  codesign --force --options runtime --timestamp --entitlements "$work/entitlements.plist" --sign "$NOVA_SIGN" "$app"
+else
+  codesign --force --deep --sign - "$app" >/dev/null 2>&1
+fi
 
-# What the website serves.
-rm -f site/Nova.zip site/payload.zip
-ditto -c -k --keepParent "$app" site/Nova.zip
+# The download: a disk image whose window shows the app, an arrow, and the Applications folder.
+echo "Making the disk image…"
+swiftc -O src/ui/make_dmg_background.swift -o "$work/make_bg" 2>/dev/null
+stage="$work/stage"; mkdir -p "$stage/.background"
+"$work/make_bg" "$stage/.background/background.png"
+ditto "$app" "$stage/Nova.app"
+ln -s /Applications "$stage/Applications"
+rm -f "$work/rw.dmg" site/Nova.dmg site/Nova.zip
+hdiutil create -quiet -volname "Nova" -srcfolder "$stage" -fs HFS+ -format UDRW -size 60m "$work/rw.dmg"
+mount=$(hdiutil attach -readwrite -noverify -noautoopen "$work/rw.dmg" | grep -o '/Volumes/.*' | head -1)
+osascript <<OSA >/dev/null 2>&1 || echo "  (the window layout could not be set; the image still works)"
+tell application "Finder"
+  tell disk "Nova"
+    open
+    set current view of container window to icon view
+    set toolbar visible of container window to false
+    set statusbar visible of container window to false
+    set bounds of container window to {200, 140, 860, 588}
+    set opts to the icon view options of container window
+    set arrangement of opts to not arranged
+    set icon size of opts to 112
+    set text size of opts to 14
+    set background picture of opts to file ".background:background.png"
+    set position of item "Nova.app" of container window to {170, 218}
+    set position of item "Applications" of container window to {490, 218}
+    update without registering applications
+    delay 1
+    close
+  end tell
+end tell
+OSA
+sync; hdiutil detach -quiet "$mount" || hdiutil detach -quiet -force "$mount"
+hdiutil convert -quiet "$work/rw.dmg" -format UDZO -imagekey zlib-level=9 -o site/Nova.dmg
+if [[ -n "$NOVA_SIGN" ]]; then
+  codesign --force --timestamp --sign "$NOVA_SIGN" site/Nova.dmg
+  if [[ -n "$NOVA_NOTARY" ]]; then
+    echo "Sending to Apple to be checked (this takes a few minutes)…"
+    xcrun notarytool submit site/Nova.dmg --keychain-profile "$NOVA_NOTARY" --wait
+    xcrun stapler staple site/Nova.dmg
+  fi
+fi
+
+# What an installed Nova fetches to update itself.
+rm -f site/payload.zip
 ditto -c -k "$payload" site/payload.zip
 sum=$(shasum -a 256 site/payload.zip | cut -d' ' -f1)
 cat > site/version.json <<JSON
@@ -83,4 +143,4 @@ cat > site/version.json <<JSON
 }
 JSON
 rm -rf "$work"
-echo "Built Nova $version: $app ($(du -sh "$app" | cut -f1)), site/Nova.zip ($(du -sh site/Nova.zip | cut -f1)), site/payload.zip ($(du -sh site/payload.zip | cut -f1))"
+echo "Built Nova $version: $app ($(du -sh "$app" | cut -f1)), site/Nova.dmg ($(du -sh site/Nova.dmg | cut -f1)), site/payload.zip ($(du -sh site/payload.zip | cut -f1))"

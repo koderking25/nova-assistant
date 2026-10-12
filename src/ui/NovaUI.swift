@@ -2102,6 +2102,54 @@ enum WakeModel {
 /// recogniser transcribes the recordings, and what it wrote is saved, with and without the
 /// name having been taught. Run with:  open -n Nova.app --args --wake-test <file> [name]
 enum WakeLab {
+    /// Transcribes every recording of a prepared test set (see the evaluation scripts), feeding the sound
+    /// in as the microphone does and with the name taught, and saves what the recogniser wrote for each.
+    static func runFolder(_ dir: String, out: String, name: String) {
+        guard let d = FileManager.default.contents(atPath: dir + "/meta.json"), let meta = try? JSONSerialization.jsonObject(with: d) as? [[String: Any]] else { exit(1) }
+        var lines: [String] = []
+        func save() { try? lines.joined(separator: "\n").write(toFile: out, atomically: true, encoding: .utf8) }
+        // 0 means macOS has not been asked yet for this copy of the app, and is asking now, on screen.
+        lines.append("# speech permission status before asking: \(SFSpeechRecognizer.authorizationStatus().rawValue)"); save()
+        SFSpeechRecognizer.requestAuthorization { auth in
+            guard auth == .authorized, let rec = SFSpeechRecognizer(locale: Locale(identifier: "en-US")), rec.supportsOnDeviceRecognition else { lines.append("not allowed"); save(); exit(1) }
+            lines.append("# allowed; \(meta.count) recordings"); save()
+            var i = 0
+            func one() {
+                guard i < meta.count else { lines.append("done"); save(); exit(0) }
+                let m = meta[i]; i += 1
+                let url = URL(fileURLWithPath: dir + "/" + ((m["file"] as? String) ?? ""))
+                guard let file = try? AVAudioFile(forReading: url), let buf = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)), (try? file.read(into: buf)) != nil else { one(); return }
+                let req = SFSpeechAudioBufferRecognitionRequest()
+                req.shouldReportPartialResults = true
+                req.requiresOnDeviceRecognition = true
+                req.contextualStrings = [name, "Hey \(name)"]
+                WakeModel.apply(to: req)
+                req.append(buf); req.endAudio()
+                var finished = false
+                var latest = "(nothing)"
+                let started = Date()
+                func finish() {
+                    guard !finished else { return }
+                    finished = true
+                    lines.append("plain | \((m["kind"] as? String) ?? "")/\((m["condition"] as? String) ?? "") | \(String(format: "%.2f", Date().timeIntervalSince(started))) | \((m["text"] as? String) ?? "") -> \(latest)")
+                    save()
+                    DispatchQueue.main.async { one() }
+                }
+                let task = rec.recognitionTask(with: req) { result, error in
+                    if let r = result { latest = r.bestTranscription.formattedString.isEmpty ? latest : r.bestTranscription.formattedString }
+                    if error != nil || (result?.isFinal ?? false) { DispatchQueue.main.async { finish() } }
+                }
+                // Very quiet or wordless sound sometimes gets no answer at all from the recogniser: move on.
+                DispatchQueue.main.asyncAfter(deadline: .now() + Double(buf.frameLength) / 16000 + 6) { if !finished { task.cancel(); finish() } }
+            }
+            DispatchQueue.main.async {
+                lines.append("# preparing the taught model"); save()
+                WakeModel.prepare(name: name) { lines.append("# taught model ready"); save(); one() }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 60) { if i == 0 { lines.append("# the taught model was not ready; running without it"); save(); one() } }
+            }
+        }
+    }
+
     static func run(out: String, name: String) {
         let dir = NSTemporaryDirectory() + "nova-wake-lab"
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
@@ -2665,6 +2713,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_ note: Notification) {
         let args = CommandLine.arguments
         if let i = args.firstIndex(of: "--snapshot"), i + 1 < args.count { return snapshot(to: args[i + 1]) }
+        if let i = args.firstIndex(of: "--wake-dir"), i + 2 < args.count { return WakeLab.runFolder(args[i + 1], out: args[i + 2], name: args[safe: i + 3] ?? "Nova") }
         if let i = args.firstIndex(of: "--wake-test"), i + 1 < args.count { return WakeLab.run(out: args[i + 1], name: args[safe: i + 2] ?? "Nova") }
 
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 840),

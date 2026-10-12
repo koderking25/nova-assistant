@@ -53,7 +53,7 @@ struct Profile: Codable {
     static let known: [String: (strict: [String], pairs: [[String]], loose: [String])] = [
         // Every list below comes from measurement: the Mac's own voices said each name 72 ways, and
         // these are the things the recogniser wrote when it got the name wrong.
-        "nova": (["nova", "novah", "novas", "novo", "noba", "nava", "nofa", "mova", "nover"], [["no", "va"], ["know", "va"], ["no", "vah"], ["no", "the"]], ["no", "noah", "lower", "over", "know", "nola", "november", "google"]),
+        "nova": (["nova", "novah", "novas", "novo", "noba", "nava", "nofa", "mova", "nover"], [["no", "va"], ["know", "va"], ["no", "vah"]], ["noah", "nola"]),
         "apollo": (["apollo", "apollos", "appolo", "apolo", "appollo"], [["a", "polo"], ["a", "pollo"], ["uh", "polo"]], ["hello", "paulo", "pablo", "polo", "follow"]),
         "harmony": (["harmony", "harmonie", "harmonies"], [["har", "money"], ["harm", "any"]], ["amity", "omni", "rely", "armani", "hominy", "army"]),
         "phoenix": (["phoenix", "phenix", "fenix", "pheonix"], [["fee", "nix"], ["fee", "nicks"]], ["felix", "next", "minutes", "phonics", "finish"]),

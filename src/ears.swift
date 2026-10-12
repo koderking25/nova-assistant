@@ -337,7 +337,7 @@ final class Ears {
             if Ears.words(request ?? "").isEmpty, (2...9).contains(Ears.words(before).filter({ $0 != "hey" }).count) { request = before }
         } else if t < openUntil {
             request = fresh
-        } else if t < casualUntil, said.count <= 9, !(said.count == 1 && (Profile.uncertainAlone[Me.key]?.contains(said[0]) ?? false) && engine.pendingConfirm == nil) {
+        } else if t < casualUntil, said.count <= 9 {
             request = fresh
             casual = true
         } else if let first = said.first(where: { $0 != "hey" && $0 != "ok" && $0 != "okay" }), Ears.looseName(first), said.count >= 2, said.count <= 12,
@@ -354,13 +354,10 @@ final class Ears {
         if request == nil {
             let core = said.filter { !["hey", "ok", "okay", "hi", "yo"].contains($0) }
             let unsure = core.count == 1 && (Profile.uncertainAlone[Me.key]?.contains(core[0]) ?? false)
-            // A word that the recogniser writes when the name was said alone ("No" for "Nova") is answered
-            // as the name, provided nobody was just talking and no yes-or-no question is waiting. Being
-            // answered when you call matters more than the odd "Yes?" to a stray word.
-            let calm = t - lastChatter > 3 && engine.pendingConfirm == nil && engine.pendingSentence == nil
-            if core.count == 1, said.count <= 2, Ears.looseName(core[0]), !unsure || said.count == 2 || calm { request = ""; lone = true }
-            // "Hey, what's the weather": the name was swallowed. Taken only if what follows is a plain request.
-            else if said.first == "hey", said.count >= 3, said.count <= 10 { request = said.dropFirst().joined(separator: " "); casualFromHey = true }
+            // A word on its own is only the name if it is one of the name's own measured mishearings and is
+            // not also an everyday word. "No" is never the name: answering it made Nova wake to ordinary talk.
+            let everydayWord = Ears.everyday.contains(core.first ?? "") || ["no", "know", "now", "nope", "hello", "next", "call", "mail", "memory", "minutes", "area", "lower", "over"].contains(core.first ?? "")
+            if core.count == 1, said.count <= 2, Ears.looseName(core[0]), !unsure, !everydayWord { request = ""; lone = true }
         }
         if casualFromHey { casual = true }
         guard let found = request else {

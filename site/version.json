@@ -1,6 +1,6 @@
 {
-  "version": "1.2.1",
-  "notes": "I answer when you call, even when the Mac mishears my name.",
+  "version": "1.2.2",
+  "notes": "I no longer wake up when someone just says no.",
   "url": "https://saynova.app/payload.zip",
-  "sha256": "aa9ccb03d066f486387f3a1ddeac2e66736f65c1b68c8a2c40713cfa4a3e1bfe"
+  "sha256": "9b80e7cf80be2c2c753943ea83d6591b432d7e106cbb4e088fd804fe4c0cffbc"
 }

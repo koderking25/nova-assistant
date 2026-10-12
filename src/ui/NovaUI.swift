@@ -2125,16 +2125,29 @@ enum WakeLab {
                 func one() {
                     guard i < clips.count else { lines.append("== \(label): the name was written correctly in \(hits) of \(clips.count)"); save(); next(); return }
                     let (v, p, url) = clips[i]; i += 1
-                    let req = SFSpeechURLRecognitionRequest(url: url)
+                    // --stream feeds the sound in as the microphone does, piece by piece, with updates as it goes.
+                    let streaming = CommandLine.arguments.contains("--stream")
+                    let req: SFSpeechRecognitionRequest
+                    if streaming, let file = try? AVAudioFile(forReading: url), let buf = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)), (try? file.read(into: buf)) != nil {
+                        let live = SFSpeechAudioBufferRecognitionRequest()
+                        live.shouldReportPartialResults = true
+                        live.append(buf)
+                        live.endAudio()
+                        req = live
+                    } else {
+                        let whole = SFSpeechURLRecognitionRequest(url: url)
+                        whole.shouldReportPartialResults = false
+                        req = whole
+                    }
                     req.requiresOnDeviceRecognition = true
-                    req.shouldReportPartialResults = false
                     req.contextualStrings = [name, "Hey \(name)"]
                     if taught { WakeModel.apply(to: req) }
                     var finished = false
                     rec.recognitionTask(with: req) { result, error in
                         guard !finished, error != nil || (result?.isFinal ?? false) else { return }
                         finished = true
-                        let text = result?.bestTranscription.formattedString ?? "(nothing)"
+                        let problem = (error as NSError?).map { " [error \($0.domain) \($0.code)]" } ?? ""
+                        let text = (result?.bestTranscription.formattedString ?? "(nothing)") + problem
                         let ok = text.lowercased().contains(name.lowercased())
                         if ok { hits += 1 }
                         lines.append("\(label) | \(ok ? "ok  " : "MISS") | \(v) | \(p) -> \(text)")

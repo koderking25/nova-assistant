@@ -8,8 +8,8 @@
 # To release an update: raise "version", say what is new in "notes", run ./build.sh, then deploy the site.
 set -e
 cd "$(dirname "$0")"
-version="1.2.0"
-notes="I hear my name far more reliably now."
+version="1.2.1"
+notes="I answer when you call, even when the Mac mishears my name."
 
 work="$(mktemp -d)"
 app="dist/Nova.app"

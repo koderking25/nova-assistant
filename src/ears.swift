@@ -337,7 +337,7 @@ final class Ears {
             if Ears.words(request ?? "").isEmpty, (2...9).contains(Ears.words(before).filter({ $0 != "hey" }).count) { request = before }
         } else if t < openUntil {
             request = fresh
-        } else if t < casualUntil, said.count <= 9 {
+        } else if t < casualUntil, said.count <= 9, !(said.count == 1 && (Profile.uncertainAlone[Me.key]?.contains(said[0]) ?? false) && engine.pendingConfirm == nil) {
             request = fresh
             casual = true
         } else if let first = said.first(where: { $0 != "hey" && $0 != "ok" && $0 != "okay" }), Ears.looseName(first), said.count >= 2, said.count <= 12,
@@ -354,27 +354,11 @@ final class Ears {
         if request == nil {
             let core = said.filter { !["hey", "ok", "okay", "hi", "yo"].contains($0) }
             let unsure = core.count == 1 && (Profile.uncertainAlone[Me.key]?.contains(core[0]) ?? false)
-            if core.count == 1, said.count <= 2, Ears.looseName(core[0]), !unsure || said.count == 2 { request = ""; lone = true }
-            else if unsure, said.count == 1, quietFor > 8, t - lastChatter > 4, t >= casualUntil {
-                // Possibly the name, possibly just a word. No reply aloud: a soft chime, and for a few
-                // seconds a plain request will be taken without the name. Anything else is let go.
-                token += 1
-                let mine = token
-                let open = { [weak self] in
-                    guard let self = self else { return }
-                    self.lock.lock()
-                    guard mine == self.token else { self.lock.unlock(); return }
-                    self.casualUntil = now() + 7
-                    self.softUntil = now() + 7
-                    self.handled = text
-                    self.lock.unlock()
-                    self.log("may have heard my name: listening quietly for a request")
-                    ui("flash good")
-                    if !Opt.fast { engine.chime([84, 91], vel: 26, hold: 0.07) }
-                }
-                if Opt.fast { lock.unlock(); open(); lock.lock() } else { DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.7, execute: open) }
-                return "soft"
-            }
+            // A word that the recogniser writes when the name was said alone ("No" for "Nova") is answered
+            // as the name, provided nobody was just talking and no yes-or-no question is waiting. Being
+            // answered when you call matters more than the odd "Yes?" to a stray word.
+            let calm = t - lastChatter > 3 && engine.pendingConfirm == nil && engine.pendingSentence == nil
+            if core.count == 1, said.count <= 2, Ears.looseName(core[0]), !unsure || said.count == 2 || calm { request = ""; lone = true }
             // "Hey, what's the weather": the name was swallowed. Taken only if what follows is a plain request.
             else if said.first == "hey", said.count >= 3, said.count <= 10 { request = said.dropFirst().joined(separator: " "); casualFromHey = true }
         }

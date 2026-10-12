@@ -864,6 +864,7 @@ final class Engine {
     var sequencing = false             // one part of "do this, then that" is being carried out
     var spotifyPausedAt = 0.0          // when Spotify was last paused by asking, so a plain "play" can bring it back
     var pretendSpotify = false         // lets the self-test check requests that depend on Spotify playing
+    var guessedName = false            // the name was only guessed at: act on nothing but an unmistakable request
     var casualHearing = false          // the sentence came without the name, in the moments after it spoke
     var aiRouting = false              // the AI has named a command and it is being carried out
     var talk: [String] = []            // the last few things said to and by the AI, so it can follow a conversation
@@ -1849,6 +1850,26 @@ if args.contains("--sound-check") {
     print("after being stopped, a note started it again: \(s.engine.isRunning ? "yes" : "no")")
     exit(0)
 }
+if let i = args.firstIndex(of: "--wake-score"), i + 2 < CommandLine.arguments.count {
+    // Takes what the recogniser really wrote for a name said many ways (a file made by the app's
+    // --wake-test) and reports how many of those would have been answered. Silent.
+    Opt.fast = true
+    Profile.current = Profile(user: "", assistant: CommandLine.arguments[i + 2], city: "", fahrenheit: false, about: "", plays: true, done: true)
+    let engine = Engine(midi: MidiIO())
+    engine.awaitingTop = false
+    let want = args.contains("--taught") ? "taught" : "plain"
+    var total = 0, heard = 0, missed: [String] = []
+    for line in ((try? String(contentsOfFile: CommandLine.arguments[i + 1], encoding: .utf8)) ?? "").components(separatedBy: "\n") where line.hasPrefix(want + " |") {
+        guard let r = line.range(of: " -> ") else { continue }
+        let wrote = String(line[r.upperBound...])
+        engine.goHomeQuietly(); engine.lastSpoken = ""; engine.lastSpokenAt = now() - 60
+        let got = wrote == "(nothing)" ? "nothing" : Ears().partial(wrote, final: true, engine: engine)
+        total += 1
+        if got == "acted" || got == "soft" { heard += 1 } else { missed.append(wrote) }
+    }
+    print("\(CommandLine.arguments[i + 2]) (\(want)): answered \(heard) of \(total). Not answered: \(missed.joined(separator: "; "))")
+    exit(0)
+}
 if args.contains("--update-test") {
     // Looks for an update and installs it, exactly as the app does after a "yes". For checking the whole path.
     guard let info = Updater.check() else { print("no newer version found (this is \(novaVersion))"); exit(0) }
@@ -1876,7 +1897,7 @@ if args.contains("--library") {
 }
 // Checks run from the command line must never disturb the copy the player is using, and a check
 // given too few arguments must stop here, not carry on and start up as a second the assistant.
-let checkFlags = ["--selftest", "--route", "--chat", "--lookup", "--reband", "--speak", "--ask", "--library", "--daw-test", "--reaper-test", "--new-logic-project", "--mute", "--cold", "--reaper", "--sound-check", "--install-voice", "--update-test"]
+let checkFlags = ["--selftest", "--route", "--chat", "--lookup", "--reband", "--speak", "--ask", "--library", "--daw-test", "--reaper-test", "--new-logic-project", "--mute", "--cold", "--reaper", "--sound-check", "--install-voice", "--update-test", "--wake-score"]
 let isCheck = args.contains { checkFlags.contains($0) }
 if !isCheck, instanceLock >= 0 { becomeOnlyCopy() }
 let midi = MidiIO()

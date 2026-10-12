@@ -16,6 +16,8 @@ final class Ears {
     private let lock = NSLock()
     private var handled = ""          // the part of the running transcript already dealt with
     private var lastMiss = 0.0
+    private var softUntil = 0.0       // until when a request counts as following a merely possible name
+    private var lastChatter = 0.0     // when ordinary talk, not meant for it, was last heard
     private var ownKey = ""           // the sentence it is saying, and how often the name has been heard during it
     private var namesHeard = 0
     private var nameAt = -1           // which word of the sentence was first heard as the name
@@ -49,13 +51,47 @@ final class Ears {
         if word == name { return true }
         if let known = Profile.known[name], known.strict.contains(word) { return true }
         if name == "jarvis" { return word.hasPrefix("jarv") || word.hasPrefix("jerv") || ((5...7).contains(word.count) && oneApart(word, "jarvis")) }
-        // A name of five letters or more may be one letter out. Shorter ones must be exact: too many real words sit one letter away.
-        return name.count >= 5 && abs(word.count - name.count) <= 1 && word.first == name.first && oneApart(word, name)
+        // A name of five letters or more may be one letter out, or be spelt differently but sound the same.
+        // Shorter ones must be exact: too many real words sit one letter away.
+        if name.count >= 5 && abs(word.count - name.count) <= 1 && word.first == name.first && oneApart(word, name) { return true }
+        return Profile.known[name] == nil && word.count >= 4 && !everyday.contains(word) && sound(word) == sound(name)
     }
 
     static func looseName(_ word: String) -> Bool {
         if Me.key == "jarvis" { return soundsLikeName(word) }
-        return Profile.known[Me.key]?.loose.contains(word) ?? false
+        if let known = Profile.known[Me.key] { return known.loose.contains(word) }
+        // A name of the person's own: a word that sounds one step away from it, unless it is an everyday word.
+        let name = sound(Me.key), heard = sound(word)
+        return word.count >= 3 && !everyday.contains(word) && heard.first == name.first && steps(heard, name) <= (name.count >= 5 ? 2 : 1)
+    }
+
+    static let everyday: Set<String> = ["the", "and", "you", "that", "was", "for", "are", "with", "his", "they", "this", "have", "from", "one", "had", "word", "but", "not", "what", "all", "were", "when",
+        "your", "can", "said", "there", "use", "each", "which", "she", "how", "their", "will", "other", "about", "out", "many", "then", "them", "these", "some", "her", "would", "make", "like", "him",
+        "into", "time", "has", "look", "two", "more", "write", "see", "number", "way", "could", "people", "than", "first", "water", "been", "call", "who", "now", "find", "long", "down", "day", "did",
+        "get", "come", "made", "may", "part", "over", "never", "know", "just", "yes", "yeah", "okay", "well", "really", "very", "here", "going", "want", "need", "think", "right", "good", "back"]
+
+    /// A word boiled down to how it sounds: letters that sound alike become one letter, and vowels become
+    /// "a" (said at the back of the mouth) or "e" (at the front). "Nova" and "Novah" both come out as "nafa".
+    static func sound(_ word: String) -> String {
+        var w = word.lowercased().filter { $0.isLetter }
+        for (a, b) in [("kn", "n"), ("ph", "f"), ("ck", "k"), ("sh", "j"), ("ch", "j"), ("th", "t"), ("wh", "w"), ("qu", "k"), ("gh", "")] { w = w.replacingOccurrences(of: a, with: b) }
+        let classes: [Character: Character] = ["b": "p", "p": "p", "d": "t", "t": "t", "g": "k", "k": "k", "c": "k", "q": "k", "f": "f", "v": "f", "s": "s", "z": "s", "x": "s", "m": "m", "n": "n",
+                                               "l": "l", "r": "r", "j": "j", "w": "w", "a": "a", "o": "a", "u": "a", "e": "e", "i": "e", "y": "e"]
+        var out: [Character] = []
+        for ch in w { if let c = classes[ch], c != out.last { out.append(c) } }
+        return String(out)
+    }
+
+    /// How many letters must be changed, added or dropped to turn one string into the other.
+    static func steps(_ a: String, _ b: String) -> Int {
+        let x = Array(a), y = Array(b)
+        if x.isEmpty || y.isEmpty { return max(x.count, y.count) }
+        var row = Array(0...y.count)
+        for i in 1...x.count {
+            var last = row[0]; row[0] = i
+            for j in 1...y.count { let keep = row[j]; row[j] = min(row[j] + 1, row[j - 1] + 1, last + (x[i - 1] == y[j - 1] ? 0 : 1)); last = keep }
+        }
+        return row[y.count]
     }
 
     /// The same sentence with every way of mishearing the name written as "Jarvis".
@@ -70,7 +106,10 @@ final class Ears {
             let b = i + 1 < parts.count ? parts[i + 1].lowercased().filter { $0.isLetter } : ""
             let split = !b.isEmpty && (a + b == name || pairs.contains([a, b]))
             let jarvisSplit = name == "jarvis" && ["jar", "char", "jah", "jaw", "ja", "jarv", "jav", "jor", "jer"].contains(a) && ["vis", "this", "viss", "vez", "vous", "vice", "fis", "bis", "vus", "vas", "ves", "vase", "viz", "us", "ice"].contains(b)
-            if split || jarvisSplit {
+            // "Hey" or "okay" in front of a word that merely sounds like the name settles it: nobody says "hey no" by chance.
+            let called = ["hey", "ok", "okay", "hi", "yo", "hello"].contains(a) && !b.isEmpty && !isName(b) && looseName(b)
+            if split || jarvisSplit || called {
+                if called { out.append(parts[i]) }
                 out.append("Jarvis"); i += 2
             } else if isName(a) { out.append("Jarvis"); i += 1 }
             else if a == "jarvis" { out.append("somebody"); i += 1 }          // the old name, when it is no longer the name, is just a word
@@ -285,6 +324,8 @@ final class Ears {
         }
         var request: String? = nil
         var casual = false
+        var casualFromHey = false
+        var guessedByName = false
         var best: Range<String.Index>? = nil
         for w in Ears.wakeWords {
             if let r = lower.range(of: w, options: .backwards), best == nil || r.lowerBound > best!.lowerBound || (r.lowerBound == best!.lowerBound && r.upperBound > best!.upperBound) { best = r }
@@ -304,6 +345,7 @@ final class Ears {
             // Possibly the name, misheard. Taken only if the rest turns out to be a plain request.
             request = said[(at + 1)...].joined(separator: " ")
             casual = true
+            guessedByName = true
         }
         // One word on its own that sounds like the name is the name: a single word after silence is
         // the hardest thing for the recogniser to get right. If more words follow and they are
@@ -311,14 +353,43 @@ final class Ears {
         var lone = false
         if request == nil {
             let core = said.filter { !["hey", "ok", "okay", "hi", "yo"].contains($0) }
-            if core.count == 1, said.count <= 2, Ears.looseName(core[0]) { request = ""; lone = true }
+            let unsure = core.count == 1 && (Profile.uncertainAlone[Me.key]?.contains(core[0]) ?? false)
+            if core.count == 1, said.count <= 2, Ears.looseName(core[0]), !unsure || said.count == 2 { request = ""; lone = true }
+            else if unsure, said.count == 1, quietFor > 8, t - lastChatter > 4, t >= casualUntil {
+                // Possibly the name, possibly just a word. No reply aloud: a soft chime, and for a few
+                // seconds a plain request will be taken without the name. Anything else is let go.
+                token += 1
+                let mine = token
+                let open = { [weak self] in
+                    guard let self = self else { return }
+                    self.lock.lock()
+                    guard mine == self.token else { self.lock.unlock(); return }
+                    self.casualUntil = now() + 7
+                    self.softUntil = now() + 7
+                    self.handled = text
+                    self.lock.unlock()
+                    self.log("may have heard my name: listening quietly for a request")
+                    ui("flash good")
+                    if !Opt.fast { engine.chime([84, 91], vel: 26, hold: 0.07) }
+                }
+                if Opt.fast { lock.unlock(); open(); lock.lock() } else { DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.7, execute: open) }
+                return "soft"
+            }
+            // "Hey, what's the weather": the name was swallowed. Taken only if what follows is a plain request.
+            else if said.first == "hey", said.count >= 3, said.count <= 10 { request = said.dropFirst().joined(separator: " "); casualFromHey = true }
         }
+        if casualFromHey { casual = true }
         guard let found = request else {
             nameAt = -1
+            if said.count >= 2 { lastChatter = t }
             token += 1          // whatever was waiting belonged to a sentence that has turned out to be ordinary talk
             if said.count <= 2, t - lastMiss > 3 { lastMiss = t; log("a word or two went by that did not sound like my name") }
             return "not for me"
         }
+        // The name was only guessed at (a sound-alike word, a bare "hey", or the quiet listening after a
+        // possible name). Then the request has to be an unmistakable one.
+        let guessed = casual && (casualFromHey || guessedByName || t < softUntil)
+        var outcome = "acted"
         token += 1
         let mine2 = token
         let pause = (try? String(contentsOf: baseDir.appendingPathComponent("voice-pause.txt"), encoding: .utf8)).flatMap { Double($0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? 0.45
@@ -340,16 +411,18 @@ final class Ears {
                 // Only plain requests count here; ordinary talk in the room is let go without a sound.
                 engine.lock.lock()
                 engine.casualHearing = true
+                engine.guessedName = guessed
                 let got = clean.isEmpty ? "ignored" : engine.hear(clean)
                 engine.casualHearing = false
+                engine.guessedName = false
                 engine.lock.unlock()
-                if got == "ignored" { self.log("let a remark go by") }
+                if got == "ignored" { self.log("let a remark go by"); outcome = "ignored" }
                 return
             }
             if !clean.isEmpty { engine.chime([96], vel: 30, hold: 0.06) }
             engine.hear(clean)
         }
-        if Opt.fast { lock.unlock(); act(); lock.lock(); return "acted" }
+        if Opt.fast { lock.unlock(); act(); lock.lock(); return outcome }
         // Act once the speaker has been quiet for a moment, or at once if the recogniser says the sentence is over.
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + wait, execute: act)
         return "waiting"

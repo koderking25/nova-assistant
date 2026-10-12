@@ -872,6 +872,13 @@ final class VoiceControl: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
             return
         }
         req.requiresOnDeviceRecognition = true
+        // The recogniser is taught the assistant's name, so it writes it far more reliably.
+        WakeModel.apply(to: req)
+        WakeModel.prepare(name: Link.shared.assistant) { [weak self] in
+            guard let self = self, self.on else { return }
+            self.log("the recogniser has been taught the name")
+            self.listen()
+        }
         // Names it should expect to hear: sent by the tool, so they include the songs in the library.
         req.contextualStrings = vocabulary.isEmpty ? ["\(Link.shared.assistant)", "Hey \(Link.shared.assistant)", "composition", "metronome", "REAPER", "Clair de Lune", "ear training", "jazz lesson"] : vocabulary
         request = req
@@ -2038,6 +2045,115 @@ struct ContentView: View {
 
 // MARK: - App
 
+// MARK: - Teaching the Mac's speech recogniser the assistant's name
+
+/// The recogniser is far more likely to write a word it has been told to expect. This builds a
+/// small custom language model around the chosen name ("Nova", "Hey Nova", "Nova, what's the
+/// weather") and hands it to every recognition request. It is made once per name, on the Mac,
+/// and kept in Nova's folder. Needs macOS 14 or later; before that the plain list of expected
+/// words is used, as before.
+enum WakeModel {
+    static var ready: Any? = nil            // SFSpeechLanguageModel.Configuration, once prepared
+    static var builtFor = ""
+    static var building = false
+
+    // How the offered names are said, in the notation the recogniser takes (X-SAMPA).
+    static let pronunciations: [String: [String]] = ["nova": ["n oU v @"]]
+    static let openers = ["what's the weather", "what time is it", "play some music", "stop", "pause", "next song", "open Safari", "set an alarm for seven", "what can you do", "play it back with the band",
+                          "new composition", "read the window", "turn it up", "remember that", "add milk to my shopping list", "brief me", "help", "louder", "thank you", "yes", "no", "play", "open", "what", "can you", "tell me"]
+
+    static func prepare(name: String, then done: @escaping () -> Void) {
+        guard #available(macOS 14.0, *), !building, builtFor != name else { return }
+        building = true
+        let dir = URL(fileURLWithPath: baseDir + "/speech-model", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let key = name.lowercased().filter { $0.isLetter }
+        let asset = dir.appendingPathComponent("\(key).bin"), lm = dir.appendingPathComponent("\(key)-lm"), vocab = dir.appendingPathComponent("\(key)-vocab")
+        Task.detached(priority: .utility) {
+            do {
+                let config = SFSpeechLanguageModel.Configuration(languageModel: lm, vocabulary: vocab)
+                if !FileManager.default.fileExists(atPath: lm.path) {
+                    let data = SFCustomLanguageModelData(locale: Locale(identifier: "en_US"), identifier: "app.nova.assistant.wake", version: "3") {
+                        SFCustomLanguageModelData.PhraseCount(phrase: name, count: 5000)
+                        SFCustomLanguageModelData.PhraseCount(phrase: "Hey \(name)", count: 2500)
+                        SFCustomLanguageModelData.PhraseCount(phrase: "Okay \(name)", count: 800)
+                        for o in WakeModel.openers {
+                            SFCustomLanguageModelData.PhraseCount(phrase: "\(name) \(o)", count: 400)
+                            SFCustomLanguageModelData.PhraseCount(phrase: "Hey \(name) \(o)", count: 150)
+                        }
+                        if let said = WakeModel.pronunciations[key] { SFCustomLanguageModelData.CustomPronunciation(grapheme: name, phonemes: said) }
+                    }
+                    try await data.export(to: asset)
+                    try await SFSpeechLanguageModel.prepareCustomLanguageModel(for: asset, clientIdentifier: "app.nova.assistant", configuration: config)
+                }
+                await MainActor.run { ready = config; builtFor = name; building = false; done() }
+            } catch {
+                await MainActor.run { building = false; VoiceControl.shared.log("the name could not be taught to the recogniser: \(error.localizedDescription)") }
+            }
+        }
+    }
+
+    static func apply(to request: SFSpeechRecognitionRequest) {
+        if #available(macOS 14.0, *), let c = ready as? SFSpeechLanguageModel.Configuration, builtFor == Link.shared.assistant { request.customizedLanguageModel = c }
+    }
+}
+
+/// A check that needs no microphone: the Mac's own voices say the name in a dozen ways, the
+/// recogniser transcribes the recordings, and what it wrote is saved, with and without the
+/// name having been taught. Run with:  open -n Nova.app --args --wake-test <file> [name]
+enum WakeLab {
+    static func run(out: String, name: String) {
+        let dir = NSTemporaryDirectory() + "nova-wake-lab"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        var lines: [String] = []
+        func save() { try? lines.joined(separator: "\n").write(toFile: out, atomically: true, encoding: .utf8) }
+        SFSpeechRecognizer.requestAuthorization { auth in
+            guard auth == .authorized, let rec = SFSpeechRecognizer(locale: Locale(identifier: "en-US")), rec.supportsOnDeviceRecognition else {
+                lines.append("speech recognition is not allowed or not on-device here (\(auth.rawValue))"); save(); exit(1)
+            }
+            let voices = ["Alex", "Daniel", "Karen", "Moira", "Fred", "Kathy", "Ralph", "Reed", "Eddy", "Flo", "Junior", "Grandma"]
+            let phrases = [name, "Hey \(name)", "\(name), what's the weather", "\(name) stop", "so anyway. \(name), play some music", "Okay \(name), what time is it"]
+            var clips: [(String, String, URL)] = []
+            for v in voices { for (i, p) in phrases.enumerated() {
+                let url = URL(fileURLWithPath: "\(dir)/\(v)-\(i).aiff")
+                let t = Process(); t.executableURL = URL(fileURLWithPath: "/usr/bin/say"); t.arguments = ["-v", v, "-o", url.path, p]
+                try? t.run(); t.waitUntilExit()
+                if FileManager.default.fileExists(atPath: url.path) { clips.append((v, p, url)) }
+            } }
+            func pass(_ label: String, taught: Bool, then next: @escaping () -> Void) {
+                var i = 0, hits = 0
+                func one() {
+                    guard i < clips.count else { lines.append("== \(label): the name was written correctly in \(hits) of \(clips.count)"); save(); next(); return }
+                    let (v, p, url) = clips[i]; i += 1
+                    let req = SFSpeechURLRecognitionRequest(url: url)
+                    req.requiresOnDeviceRecognition = true
+                    req.shouldReportPartialResults = false
+                    req.contextualStrings = [name, "Hey \(name)"]
+                    if taught { WakeModel.apply(to: req) }
+                    var finished = false
+                    rec.recognitionTask(with: req) { result, error in
+                        guard !finished, error != nil || (result?.isFinal ?? false) else { return }
+                        finished = true
+                        let text = result?.bestTranscription.formattedString ?? "(nothing)"
+                        let ok = text.lowercased().contains(name.lowercased())
+                        if ok { hits += 1 }
+                        lines.append("\(label) | \(ok ? "ok  " : "MISS") | \(v) | \(p) -> \(text)")
+                        DispatchQueue.main.async { one() }
+                    }
+                }
+                one()
+            }
+            DispatchQueue.main.async {
+                pass("plain", taught: false) {
+                    if CommandLine.arguments.contains("--quick") { lines.append("done"); save(); exit(0) }
+                    WakeModel.prepare(name: name) { pass("taught", taught: true) { lines.append("done"); save(); exit(0) } }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 240) { lines.append("the taught model was not ready after four minutes"); save(); exit(0) }
+                }
+            }
+        }
+    }
+}
+
 // MARK: - The welcome: a few easy questions, the first time
 
 /// One question to a screen, in large type, typed out as if being said. Everything can be
@@ -2060,7 +2176,8 @@ struct WelcomeScreen: View {
     @State private var listen = true
     @State private var natural = true
     @FocusState private var typing: Bool
-    static let names = ["Nova", "Aria", "Luna", "Atlas", "Orion"]
+    // Offered in the order the Mac hears them best, after Nova itself. (Measured: see Profile.measured in the engine.)
+    static let names = ["Nova", "Apollo", "Harmony", "Phoenix", "Luna", "Melody", "Aria"]
     static let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     static let monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
     private let ticker = Timer.publish(every: 0.022, on: .main, in: .common).autoconnect()
@@ -2072,7 +2189,7 @@ struct WelcomeScreen: View {
     private var questions: [(title: String, sub: String)] {
         [("Hello. I\u{2019}m Nova.", "A few quick questions and I\u{2019}m set up for you. Your answers stay on this Mac, and every screen has a skip button."),
          ("What should I call you?", "A first name or a nickname. Whatever you like to hear."),
-         ("And what will you call me?", "This is the word you say to get my attention. Pick one that feels easy to say."),
+         ("And what will you call me?", "This is the word you say to get my attention. Longer names are the easiest for a Mac to hear: Apollo, Harmony and Phoenix are caught almost every time."),
          ("Where in the world are you?", "Only used to tell you the weather. A town or city is enough."),
          ("When\u{2019}s your birthday?", "Just the day and the month, so I can wish you a happy birthday. No year, so no age, and you don\u{2019}t have to be 18. Skip it if you\u{2019}d rather not say."),
          ("How can I fit you best?", "Switch on anything that helps. All of it can be changed later, just by asking."),
@@ -2164,12 +2281,12 @@ struct WelcomeScreen: View {
                 .accessibilityLabel("Your name")
         case 2:
             VStack(spacing: 22) {
-                HStack(spacing: 14) {
+                HStack(spacing: 10) {
                     ForEach(WelcomeScreen.names, id: \.self) { n in
                         Button(action: { wake = n; custom = "" }) {
-                            Text(n.uppercased()).font(Hud.mono(17, .bold)).tracking(3)
+                            Text(n.uppercased()).font(Hud.mono(15, .bold)).tracking(2)
                                 .foregroundColor(chosen == n ? Color.black : Hud.soft)
-                                .padding(.horizontal, 22).padding(.vertical, 14)
+                                .padding(.horizontal, 15).padding(.vertical, 14)
                                 .background(RoundedRectangle(cornerRadius: 14).fill(chosen == n ? Hud.green : Hud.panel))
                                 .overlay(RoundedRectangle(cornerRadius: 14).stroke(Hud.green.opacity(chosen == n ? 1 : 0.35), lineWidth: 1.5))
                         }
@@ -2535,6 +2652,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_ note: Notification) {
         let args = CommandLine.arguments
         if let i = args.firstIndex(of: "--snapshot"), i + 1 < args.count { return snapshot(to: args[i + 1]) }
+        if let i = args.firstIndex(of: "--wake-test"), i + 1 < args.count { return WakeLab.run(out: args[i + 1], name: args[safe: i + 2] ?? "Nova") }
 
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 840),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],

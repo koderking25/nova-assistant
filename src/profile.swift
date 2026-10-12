@@ -51,13 +51,29 @@ struct Profile: Codable {
     /// write it. `strict` spellings count anywhere; `loose` ones are real words too, so they
     /// only count at the very start of a sentence that turns out to be a request.
     static let known: [String: (strict: [String], pairs: [[String]], loose: [String])] = [
-        "nova": (["nova", "novah", "novas", "novo", "noba", "nava", "nofa", "mova", "nover"], [["no", "va"], ["know", "va"], ["no", "vah"], ["no", "the"]], ["noah", "over", "november"]),
-        "aria": (["aria", "arya", "ariah", "arias", "ariya"], [["ah", "ria"], ["a", "ria"], ["are", "ya"]], ["area", "areas"]),
-        "luna": (["luna", "lunah", "loona", "lunas"], [["lou", "na"], ["loo", "na"]], ["lunar", "lena", "luma"]),
-        "atlas": (["atlas", "atlus", "atlass"], [["at", "las"], ["at", "less"]], ["at last", "alice"]),
-        "orion": (["orion", "oryan", "orions", "oreon"], [["o", "ryan"], ["oh", "ryan"], ["o", "ryon"]], ["ryan", "onion"]),
+        // Every list below comes from measurement: the Mac's own voices said each name 72 ways, and
+        // these are the things the recogniser wrote when it got the name wrong.
+        "nova": (["nova", "novah", "novas", "novo", "noba", "nava", "nofa", "mova", "nover"], [["no", "va"], ["know", "va"], ["no", "vah"], ["no", "the"]], ["no", "noah", "lower", "over", "know", "nola", "november", "google"]),
+        "apollo": (["apollo", "apollos", "appolo", "apolo", "appollo"], [["a", "polo"], ["a", "pollo"], ["uh", "polo"]], ["hello", "paulo", "pablo", "polo", "follow"]),
+        "harmony": (["harmony", "harmonie", "harmonies"], [["har", "money"], ["harm", "any"]], ["amity", "omni", "rely", "armani", "hominy", "army"]),
+        "phoenix": (["phoenix", "phenix", "fenix", "pheonix"], [["fee", "nix"], ["fee", "nicks"]], ["felix", "next", "minutes", "phonics", "finish"]),
+        "luna": (["luna", "lunah", "loona", "lunas"], [["lou", "na"], ["loo", "na"]], ["lunar", "lena", "luma", "bruno", "lu", "lou"]),
+        "aria": (["aria", "arya", "ariah", "arias", "ariya"], [["ah", "ria"], ["a", "ria"], ["are", "ya"]], ["area", "areas", "oreo", "ariel", "arm"]),
+        "melody": (["melody", "melodie", "melodies"], [["mel", "lady"], ["mel", "o", "d"]], ["melanie", "mel", "memory", "memories", "mail"]),
+        "galaxy": (["galaxy", "galaxie", "galaxies"], [["gal", "axy"]], ["alex", "danny", "gallery"]),
+        "atlas": (["atlas", "atlus", "atlass"], [["at", "las"], ["at", "less"], ["add", "list"], ["at", "least"]], ["atmos", "alice"]),
+        "orion": (["orion", "oryan", "orions", "oreon"], [["o", "ryan"], ["oh", "ryan"], ["o", "ryon"]], ["ryan", "rhyme", "onion"]),
         "jarvis": (["jarvis", "jarvus", "jervis", "jarvas", "javis", "charvis", "jarvice", "jarves", "garvis", "darvis", "jarvi", "travis"], [], []),
     ]
+
+    /// Words the recogniser sometimes writes when the name was said on its own, but which are
+    /// also said all the time ("no"). On their own they are not answered aloud: the assistant
+    /// gives a soft chime and listens for a moment, and only a plain request is then acted on.
+    static let uncertainAlone: [String: Set<String>] = ["nova": ["no", "lower", "noah", "know"], "apollo": ["hello"], "luna": ["lu", "lou"], "harmony": ["rely"], "melody": ["mail", "memory"],
+                                                        "aria": ["oreo", "area"], "phoenix": ["next", "minutes"], "galaxy": ["alex"]]
+
+    /// How reliably the Mac's recogniser wrote each offered name in that measurement, out of 72.
+    static let measured: [String: Int] = ["jarvis": 70, "apollo": 69, "galaxy": 68, "harmony": 67, "phoenix": 65, "luna": 63, "melody": 62, "aria": 61, "nova": 57]
 
     /// A name someone has typed or said, made fit to be a wake word: one word, letters only. Nil if it cannot be one.
     static func cleanName(_ raw: String) -> String? {

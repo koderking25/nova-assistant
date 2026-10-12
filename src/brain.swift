@@ -143,6 +143,8 @@ extension Engine {
         // "Do this, and then that."
         if !secondPass, !sequencing, !casualHearing, !h.has("spotify", "youtube", "click menu"), let done = sequenceHear(raw) { return done }
         if !secondPass, !aiRouting, !casualHearing, !h.words.isEmpty { lastRequest = h.text }
+        // A guessed name followed by a long sentence, or by "stop" inside a longer remark, is talk in the room.
+        if guessedName, h.words.count > 8 || (h.words.count > 2 && h.starts("stop", "quiet", "be quiet", "silence", "enough", "cancel", "pause", "wait", "hold on", "home", "goodbye", "bye", "quit", "never mind", "yes", "no")) { return "ignored" }
         if h.words.isEmpty {
             // Just the name: a short spoken answer, never the same one twice running, and
             // fitted to the moment. These are all prepared in advance, so they come at once.
@@ -387,7 +389,9 @@ extension Engine {
             if done != "ask" { return done }
         }
         // Conversation, sums, and music questions it can answer itself.
-        if let answer = chat(h) { reply(answer); return "chat" }
+        // After a merely guessed name there is no small talk: only the weather, which is a request.
+        if guessedName { if let answer = weatherTalk(h) { reply(answer); return "chat" } }
+        else if let answer = chat(h) { reply(answer); return "chat" }
         if secondPass { return "ask" }
         // Words overheard just after it spoke, without its name, are only acted on when they are plainly a request.
         if casualHearing { return "ignored" }

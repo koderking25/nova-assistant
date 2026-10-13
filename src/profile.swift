@@ -14,6 +14,7 @@ struct Profile: Codable {
     var plays = true              // false hides nothing, but the greeting stops assuming a piano
     var done = false              // the welcome has been finished
     var birthday = ""             // "MM-DD", or empty. No year is ever asked for or kept.
+    var style = "classic"         // its manner: classic, warm, playful or brief
 
     init() {}
     init(user: String, assistant: String, city: String, fahrenheit: Bool, about: String, plays: Bool, done: Bool) {
@@ -30,6 +31,7 @@ struct Profile: Codable {
         plays = (try? c.decode(Bool.self, forKey: .plays)) ?? true
         done = (try? c.decode(Bool.self, forKey: .done)) ?? false
         birthday = (try? c.decode(String.self, forKey: .birthday)) ?? ""
+        style = (try? c.decode(String.self, forKey: .style)) ?? "classic"
     }
 
     static var isBirthday: Bool {

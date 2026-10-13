@@ -18,8 +18,24 @@ final class Ears {
     private var lastMiss = 0.0
     private var softUntil = 0.0       // until when a request counts as following a merely possible name
     private var lastChatter = 0.0     // when ordinary talk, not meant for it, was last heard
-    private var ownKey = ""           // the sentence it is saying, and how often the name has been heard during it
-    private var namesHeard = 0
+    private var credits: [Double] = []   // one for each time it has said its own name and may yet hear it back; each has a time it lapses
+    private var regionKey = ""        // the dealt-with text that the stretch now being counted follows
+    private var regionSeen = 0, regionCredits = 0, regionWords = 0
+    private var nameIsReal = false    // a name in the current stretch was said by a person, not by itself
+
+    /// The assistant is about to say this. Each time its own name is in it, the microphone may hand that name back.
+    func spoke(_ text: String) {
+        lock.lock(); defer { lock.unlock() }
+        let n = Ears.words(Ears.tidy(text)).filter { $0 == "jarvis" }.count
+        credits += Array(repeating: Double.infinity, count: n)
+    }
+    func lapseCreditsForTest() { lock.lock(); credits = []; lock.unlock() }
+    func cutOff() { lock.lock(); settleCredits(within: 1.5); lock.unlock() }
+    /// It has stopped (finished, or was cut off): its own name can only come back for a few seconds more.
+    func settleCredits(within seconds: Double) {
+        let until = now() + seconds
+        credits = credits.map { $0 == .infinity ? until : $0 }
+    }
     private var nameAt = -1           // which word of the sentence was first heard as the name
     private var nameSeen = 0.0        // and when: the recogniser sometimes rewrites it a moment later
     private var lastText = ""
@@ -134,7 +150,10 @@ final class Ears {
     var overUntil = 0.0               // until when someone seems to be talking over it
     private var fruitless = 0         // times in this sentence the voice dropped for nothing
 
+    static let bargeByLevel = ((try? String(contentsOf: baseDir.appendingPathComponent("barge.txt"), encoding: .utf8)) ?? "").hasPrefix("1")
+
     func level(_ v: Double, engine: Engine) {
+        guard Ears.bargeByLevel || Opt.fast else { return }
         lock.lock(); defer { lock.unlock() }
         let t = now()
         let speaking = engine.lastSpokenAt > t
@@ -224,6 +243,7 @@ final class Ears {
     /// The assistant has just finished speaking: the wait for a request starts now.
     func voiceFinished() {
         lock.lock(); defer { lock.unlock() }
+        settleCredits(within: 3)
         if awaiting {
             openUntil = now() + 8
             // Anything said while it was answering is looked at as soon as its own echo has died away.
@@ -243,6 +263,7 @@ final class Ears {
     /// answer does not need the name in front of it.
     func expectAnswer() {
         lock.lock(); defer { lock.unlock() }
+        settleCredits(within: 3)
         awaiting = true
         openUntil = now() + 12
     }
@@ -262,20 +283,38 @@ final class Ears {
         let own = Ears.words(Ears.tidy(engine.lastSpoken))
         let mine = Set(own)
         var interrupted = false
+        // Whose "Jarvis" is it? Every time the assistant says its own name it notes that the microphone
+        // may hand that name back. A name in the transcript is first set against those notes; only a
+        // name left over after that was said by a person. This is counted over the whole stretch of
+        // transcript still to be dealt with, so the recogniser rewriting its text cannot count a name twice.
+        credits.removeAll { $0 < t }
+        let stretch = Ears.words(fresh)
+        let namesNow = stretch.filter { $0 == "jarvis" }.count
+        if regionKey != handled {
+            regionKey = handled; regionSeen = 0; regionCredits = 0; nameIsReal = false
+        } else if stretch.count < regionWords {
+            // Rewritten and shorter: count it afresh, giving back what had been set against its own voice.
+            credits.insert(contentsOf: Array(repeating: speaking ? Double.infinity : t + 3, count: regionCredits), at: 0)
+            regionSeen = 0; regionCredits = 0; nameIsReal = false
+        }
+        regionWords = stretch.count
+        if namesNow > regionSeen {
+            for _ in 0..<(namesNow - regionSeen) {
+                if !credits.isEmpty { credits.removeFirst(); regionCredits += 1 } else { nameIsReal = true }
+            }
+        }
+        regionSeen = namesNow
+        // A name that was only its own voice coming back is taken out, so nothing below mistakes it for a call.
+        if namesNow > 0, !nameIsReal { fresh = fresh.split(separator: " ").filter { Ears.words(String($0)).first != "jarvis" }.joined(separator: " ") }
         if speaking || quietFor < 0.6 {
             // While it is talking, the microphone mostly hears its own voice. But the name, or
             // "stop", cuts in: unless it is saying that very word itself.
             let heardNow = Ears.words(fresh)
             // If it is saying the name or "stop" itself, the word only counts when it is heard more
             // often than it was said, or while somebody is plainly talking over it.
-            let over = t < overUntil
             func more(_ w: String) -> Bool { heardNow.filter { $0 == w }.count > own.filter { $0 == w }.count }
-            // Its own name in its own sentence is the commonest way it could set itself off, so there
-            // the name must be heard more often, over the whole sentence, than it says it.
-            if ownKey != engine.lastSpoken { ownKey = engine.lastSpoken; namesHeard = 0 }
-            namesHeard += heardNow.filter { $0 == "jarvis" }.count
-            let name = heardNow.contains("jarvis") && (!mine.contains("jarvis") || namesHeard > own.filter { $0 == "jarvis" }.count)
-            let halt = ["stop", "quiet", "enough", "cancel", "silence", "shush"].contains { heardNow.contains($0) && (!mine.contains($0) || over || more($0)) }
+            let name = heardNow.contains("jarvis") && nameIsReal
+            let halt = ["stop", "quiet", "enough", "cancel", "silence", "shush"].contains { heardNow.contains($0) && (!mine.contains($0) || more($0)) }
             guard name || halt else {
                 // During its short "Yes, sir?" the request has often already begun. Those words are
                 // kept and looked at again the moment it stops, not thrown away.
@@ -484,15 +523,31 @@ func earsSelfTest(_ engine: Engine, _ check: (String, Bool, String) -> Void) {
     // It says its own name in a sentence: neither hearing that during the sentence, nor its tail just after, sets it off.
     let ears7 = Ears()
     engine.lastSpoken = "Say Jarvis stop, or press home, to end it. Say Jarvis stop"
+    ears7.spoke(engine.lastSpoken)
     engine.lastSpokenAt = now() + 30
     let self1 = ears7.partial("say Jarvis", final: false, engine: engine)
+    let self1b = ears7.partial("say Jarvis stop or", final: false, engine: engine)      // the same name again as the text grows: still its own
+    let self1c = ears7.partial("say Jarvis", final: false, engine: engine)              // and when the recogniser takes words back
+    let talking = engine.lastSpokenAt > now()
     engine.lastSpokenAt = now() - 1
-    let self2a = ears7.partial("say Jarvis stop", final: true, engine: engine)
-    let self2 = Ears().partial("Jarvis stop", final: true, engine: engine)        // the recogniser starting afresh with just the tail
+    let self2a = ears7.partial("say Jarvis stop or press home to end it say Jarvis stop", final: true, engine: engine)
     let still = engine.lastSpokenAt
+    ears7.lapseCreditsForTest()
     engine.lastSpokenAt = now() - 4
-    let self3 = Ears().partial("Jarvis stop", final: true, engine: engine)
-    check("ears: its own voice saying Jarvis never sets it off, yet Jarvis stop from a person still works a moment later", self1 == "busy" && self2a != "acted" && self2 == "echo" && still <= now() && self3 == "acted", "\(self1) \(self2a) \(self2) \(self3)")
+    let self3 = ears7.partial("say Jarvis stop or press home to end it say Jarvis stop Jarvis stop", final: true, engine: engine)
+    check("ears: its own voice saying Jarvis never sets it off, yet Jarvis stop from a person still works a moment later", self1 == "busy" && self1b == "busy" && self1c == "busy" && talking && self2a != "acted" && still <= now() && self3 == "acted", "\(self1) \(self1b) \(self1c) \(talking) \(self2a) \(self3)")
+    engine.goHomeQuietly()
+    // The case from the log: the wake word is Jarvis, it introduces itself by name, and a person then calls it over that.
+    let ears8 = Ears()
+    engine.lastSpoken = "I'm Jarvis. Say Jarvis, then what you need."
+    ears8.spoke(engine.lastSpoken)
+    engine.lastSpokenAt = now() + 30
+    let w1 = ears8.partial("I'm Jarvis", final: false, engine: engine)
+    let w2 = ears8.partial("I'm Jarvis say Jarvis", final: false, engine: engine)
+    let w3 = ears8.partial("I'm Jarvis say Jarvis then what you", final: false, engine: engine)
+    let unbroken = engine.lastSpokenAt > now()
+    let w4 = ears8.partial("I'm Jarvis say Jarvis then what you Jarvis new composition", final: true, engine: engine)
+    check("ears: introducing itself by name does not wake it, and a third Jarvis from a person does", w1 == "busy" && w2 == "busy" && w3 == "busy" && unbroken && w4 == "acted" && engine.mode == .compose, "\(w1) \(w2) \(w3) \(unbroken) \(w4) \(engine.mode)")
     engine.goHomeQuietly()
     // Starting the request while it is still saying "Yes, sir?": the words are kept.
     let ears5 = Ears()

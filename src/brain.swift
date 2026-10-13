@@ -87,6 +87,7 @@ extension Engine {
         let raw = lead.isEmpty ? said : (Ears.tidy(lead.prefix(3).joined(separator: " ")) + (lead.count > 3 ? " " + lead[3] : ""))
         let h = Heard(raw)
         ui("heard " + raw)
+        if !h.text.isEmpty { asked += 1 }
         // The microphone also hears the assistant's own voice. Words that it has just spoken
         // itself are an echo, not a request.
         let echo = Heard(raw).text
@@ -158,6 +159,13 @@ extension Engine {
         // Spotify, YouTube, files and the forecast. First, because a song can be called anything: "play Home on Spotify".
         if let done = updateHear(h) { return done }
         if let done = profileHear(h) { return done }
+        if h.has("your settings", "jarvis settings", "nova settings", "app settings", "quick settings", "your preferences", "assistant settings") && !h.has("system") {
+            ui("settings 1")
+            run { g in self.say(self.styled(classic: ["Settings, on screen."], warm: ["Here are my settings."], playful: ["Settings. Change anything you like."], brief: ["Settings."]), g) }
+            return "settings"
+        }
+        if let done = personalityHear(h) { return done }
+        if !h.text.isEmpty { lastDone = h.text }
         if let done = voiceInstallHear(h) { return done }
         if let done = extrasHear(h) { return done }
         if let done = homeHear(h) { return done }
@@ -573,13 +581,9 @@ extension Engine {
     func wakeReply() -> String {
         let t = now()
         defer { lastWakeAt = t }
-        var options = ["Yes, \(You.name)?", "I'm listening.", "Go ahead.", "At your service.", "Yes, \(You.name)?", "How can I help?", "What do you need?", "I'm here, \(You.name).", "Right here."]
-        // Called again straight away, with nothing asked in between.
-        if t - lastWakeAt < 12 { options = ["Still here, \(You.name).", "I'm listening.", "Go ahead."] }
-        else if wakeCount == 0 {
-            let hour = Calendar.current.component(.hour, from: Date())
-            options = [hour < 12 ? "Good morning, \(You.name)." : hour >= 18 ? "Good evening, \(You.name)." : "Yes, \(You.name)?"]
-        } else if t - lastWakeAt > 1200 { options = ["Welcome back, \(You.name).", "Yes, \(You.name)?"] }
+        // Called again straight away with nothing asked in between; the first call of the day; back after a long while.
+        var options = wakeOptions(hour: Calendar.current.component(.hour, from: Date()), first: wakeCount == 0 && t - lastWakeAt >= 12, again: t - lastWakeAt < 12, longGap: t - lastWakeAt > 1200)
+        if t - lastWakeAt < 12 || wakeCount == 0 || t - lastWakeAt > 1200 || Style.current == .brief {}
         else if mode == .compose, Int.random(in: 0..<4) == 0 { options = ["Yes? I'm following your piece."] }
         else if mode == .teach, Int.random(in: 0..<4) == 0 { options = ["Yes? The lesson can wait."] }
         wakeCount += 1

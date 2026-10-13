@@ -514,6 +514,36 @@ extension Engine {
             run { g in self.say("All set\(Profile.current.user.isEmpty ? "" : ", \(You.name)"). I'm \(Me.name). Whenever you need me, say \(Me.name), then what you'd like. Try: \(Me.name), what can you do?", g); self.fetchVoiceIfWanted(announce: true) }
             return
         }
+        // The settings screen: everything at once, applied straight away, and only what changed is mentioned.
+        if text.hasPrefix("prefs ") {
+            let f = text.dropFirst(6).components(separatedBy: "|")
+            guard f.count >= 7 else { return }
+            let before = Profile.current
+            Profile.current.user = f[0].trimmingCharacters(in: .whitespaces)
+            Profile.current.assistant = Profile.cleanName(f[1]) ?? before.assistant
+            Profile.current.city = f[2].trimmingCharacters(in: .whitespaces)
+            Profile.current.fahrenheit = f[3] == "F"
+            Profile.current.birthday = f[4].count == 5 ? f[4] : ""
+            Profile.current.style = Style(rawValue: f[5])?.rawValue ?? before.style
+            Profile.current.plays = f[6] == "1"
+            Profile.current.done = true
+            Profile.save()
+            let now = Profile.current
+            if now.city != before.city || now.fahrenheit != before.fahrenheit { Weather.latest = nil; Weather.refresh() }
+            if now.assistant != before.assistant || now.style != before.style || now.user != before.user { AISession.shared.shutDown() }
+            ui("name \(Me.name)|\(You.name)")
+            ui("style \(now.style)")
+            sendVocabulary()
+            var told: [String] = []
+            // Its new name is said once, on purpose: this is the moment to hear how it sounds.
+            if now.assistant != before.assistant { told.append("From now on, call me \(now.assistant)") }
+            if now.user != before.user, !now.user.isEmpty { told.append("I'll call you \(now.user)") }
+            if now.city != before.city, !now.city.isEmpty { told.append("weather for \(now.city)") }
+            if now.style != before.style { told.append(["classic": "classic manner", "warm": "a warmer manner", "playful": "playful it is", "brief": "fewer words"][now.style] ?? "") }
+            let line = told.isEmpty ? "Saved." : told.joined(separator: ". ") + "."
+            run { g in self.say(line.prefix(1).uppercased() + line.dropFirst(), g) }
+            return
+        }
         if text.hasPrefix("lvl ") { ears.level(Double(text.dropFirst(4)) ?? 0, engine: self); return }   // how loud the microphone is, several times a second
         if text.hasPrefix("say ") { hear(String(text.dropFirst(4))); return }   // spoken or typed to the assistant
         if text == "say" { hear(""); return }

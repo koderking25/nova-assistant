@@ -8,8 +8,8 @@
 # To release an update: raise "version", say what is new in "notes", run ./build.sh, then deploy the site.
 set -e
 cd "$(dirname "$0")"
-version="1.2.2"
-notes="I no longer wake up when someone just says no."
+version="1.3.0"
+notes="I no longer wake myself up, settings are now one quick screen, and I have a personality you can choose."
 
 work="$(mktemp -d)"
 app="dist/Nova.app"
@@ -24,8 +24,12 @@ done
 lipo -create "$work/engine-arm64" "$work/engine-x86_64" -output "$payload/nova-engine"
 
 echo "Building the window…"
+# The macOS 27 command line tools need Xcode's SwiftUI macro plugin, which they do not include.
+# Where the macOS 26 SDK is also installed, the window is built against that one, which needs no plugin.
+uisdk="$(xcrun --show-sdk-path)"
+[ -d /Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk ] && [ ! -d "$(xcode-select -p)/Platforms" ] && uisdk=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk
 for arch in arm64 x86_64; do
-  swiftc -O -swift-version 5 -target $arch-apple-macos13.0 -parse-as-library -emit-library src/ui/NovaUI.swift -o "$work/ui-$arch.dylib" 2> "$work/ui-$arch.log" || { grep error -A4 "$work/ui-$arch.log" | head -20; exit 1; }
+  SDKROOT="$uisdk" swiftc -O -swift-version 5 -target $arch-apple-macos13.0 -parse-as-library -emit-library src/ui/NovaUI.swift -o "$work/ui-$arch.dylib" 2> "$work/ui-$arch.log" || { grep error -A4 "$work/ui-$arch.log" | head -20; exit 1; }
 done
 lipo -create "$work/ui-arm64.dylib" "$work/ui-x86_64.dylib" -output "$payload/libNovaUI.dylib"
 

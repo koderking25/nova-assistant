@@ -116,6 +116,8 @@ final class Link: ObservableObject {
     @Published var updateVersion = ""      // a newer version is on offer: shown until answered
     @Published var updateNotes = ""
     @Published var welcome = false         // the first-run questions are on screen
+    @Published var settings = false        // the one-screen settings are on screen
+    @Published var style = (savedProfile()["style"] as? String) ?? "classic"
     var welcomeKey: ((NSEvent) -> Bool)?   // the welcome's own handling of arrow keys; true means "that was mine"
     var tabbing = false                    // Tab has been used: Space and Return then press the control the keyboard is on
     var welcomeStepForSnapshot = 0
@@ -488,6 +490,8 @@ final class Link: ObservableObject {
             assistant = parts[0].isEmpty ? "Nova" : parts[0]
             user = parts.count > 1 && parts[1] != "friend" ? parts[1] : ""
         case "welcome": welcome = true; AppDelegate.shared?.showWindow()
+        case "settings": settings = true; AppDelegate.shared?.showWindow()
+        case "style": style = rest
         case "update":
             let parts = rest.components(separatedBy: "|")
             updateVersion = parts[0].trimmingCharacters(in: .whitespaces)
@@ -1882,7 +1886,7 @@ struct ContentView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            if link.welcome { WelcomeScreen(link: link) } else if link.visual { VisualiserScreen(link: link) } else { console }
+            if link.welcome { WelcomeScreen(link: link) } else if link.settings { SettingsScreen(link: link) } else if link.visual { VisualiserScreen(link: link) } else { console }
             VStack { UpdateBanner(link: link); Spacer() }.animation(.easeOut(duration: 0.35), value: link.updateVersion)
         }
         .frame(minWidth: 1120, minHeight: 780)
@@ -2526,6 +2530,187 @@ struct WelcomeScreen: View {
     }
 }
 
+// MARK: - Settings: everything on one screen, saved with one press
+
+struct SettingsScreen: View {
+    @ObservedObject var link: Link
+    @State private var name = ""
+    @State private var wake = "Nova"
+    @State private var custom = ""
+    @State private var city = ""
+    @State private var fahrenheit = false
+    @State private var month = 0
+    @State private var day = 1
+    @State private var style = "classic"
+    @State private var plays = true
+    @State private var large = UserDefaults.standard.bool(forKey: "large")
+    @State private var contrast = UserDefaults.standard.bool(forKey: "contrast")
+    @State private var listen = VoiceControl.shared.on
+    @State private var login = LoginItem.on
+    @FocusState private var first: Bool
+    static let styles: [(key: String, title: String, sample: String)] = [
+        ("classic", "CLASSIC", "\u{201C}At your service.\u{201D} Composed, quick, a dry wit."),
+        ("warm", "WARM", "\u{201C}I\u{2019}m here. What can I do for you?\u{201D} Kind and encouraging."),
+        ("playful", "PLAYFUL", "\u{201C}You rang?\u{201D} Light, quick, and a joke when one fits."),
+        ("brief", "BRIEF", "\u{201C}Yes?\u{201D} As few words as possible.")]
+
+    private var chosen: String {
+        let c = custom.trimmingCharacters(in: .whitespaces).filter { $0.isLetter }
+        return (3...12).contains(c.count) ? c.prefix(1).uppercased() + c.dropFirst().lowercased() : wake
+    }
+
+    private func save() {
+        guard link.settings else { return }
+        func clean(_ t: String) -> String { t.replacingOccurrences(of: "|", with: " ").replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces) }
+        link.setAccess("large", large)
+        link.setAccess("contrast", contrast)
+        link.send("~prefs \(clean(name))|\(chosen)|\(clean(city))|\(fahrenheit ? "F" : "C")|\(month > 0 ? String(format: "%02d-%02d", month, day) : "")|\(style)|\(plays ? 1 : 0)\n")
+        link.assistant = chosen
+        link.user = clean(name)
+        link.style = style
+        if listen != VoiceControl.shared.on { VoiceControl.shared.toggle() }
+        if login != LoginItem.on { _ = LoginItem.set(login) }
+        link.settings = false
+    }
+
+    private func label(_ t: String) -> some View {
+        Text(t).font(Hud.mono(12, .semibold)).tracking(3).foregroundColor(Hud.green.opacity(0.85)).accessibilityAddTraits(.isHeader)
+    }
+    private func field(_ title: String, _ text: Binding<String>, width: CGFloat = 300) -> some View {
+        TextField(title, text: text)
+            .textFieldStyle(.plain).font(.system(size: 20, weight: .medium, design: .monospaced)).foregroundColor(.white)
+            .padding(.vertical, 7).frame(width: width)
+            .overlay(Rectangle().frame(height: 1.5).foregroundColor(Hud.green.opacity(0.7)), alignment: .bottom)
+            .onSubmit { save() }
+            .accessibilityLabel(title)
+    }
+    private func chip(_ title: String, _ on: Bool, _ say: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title).font(Hud.mono(13.5, .bold)).tracking(1.5)
+                .foregroundColor(on ? Color.black : Hud.soft)
+                .padding(.horizontal, 13).padding(.vertical, 10)
+                .background(RoundedRectangle(cornerRadius: 12).fill(on ? Hud.green : Hud.panel))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Hud.green.opacity(on ? 1 : 0.35), lineWidth: 1.5))
+        }
+        .buttonStyle(.plain).focusRing().accessibilityLabel(say + (on ? ", chosen" : ""))
+    }
+    private func tick(_ title: String, _ value: Binding<Bool>) -> some View {
+        Button(action: { value.wrappedValue.toggle() }) {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6).stroke(Hud.green.opacity(0.8), lineWidth: 1.5).frame(width: 24, height: 24)
+                    if value.wrappedValue { RoundedRectangle(cornerRadius: 4).fill(Hud.green).frame(width: 14, height: 14) }
+                }
+                Text(title).font(Hud.mono(15, .medium)).foregroundColor(.white)
+                Spacer()
+            }
+            .padding(.vertical, 5).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).focusRing().accessibilityLabel(title).accessibilityValue(value.wrappedValue ? "on" : "off")
+    }
+
+    var body: some View {
+        ZStack {
+            Hud.bg.ignoresSafeArea()
+            Grid().opacity(0.5)
+            VStack(spacing: 0) {
+                Text("SETTINGS").font(.system(size: 30, weight: .semibold, design: .monospaced)).tracking(8).foregroundColor(.white)
+                    .shadow(color: Hud.green.opacity(0.6), radius: 14).padding(.top, 34).accessibilityAddTraits(.isHeader)
+                Text("Change anything, then press Return. Escape leaves without saving.").font(Hud.mono(14)).foregroundColor(Hud.soft.opacity(0.85)).padding(.top, 8)
+                Spacer(minLength: 16)
+                HStack(alignment: .top, spacing: 56) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        label("WAKE WORD")
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 8) { ForEach(WelcomeScreen.names.prefix(4), id: \.self) { n in chip(n.uppercased(), chosen == n, n) { wake = n; custom = "" } } }
+                            HStack(spacing: 8) { ForEach(WelcomeScreen.names.dropFirst(4), id: \.self) { n in chip(n.uppercased(), chosen == n, n) { wake = n; custom = "" } } }
+                        }
+                        HStack(spacing: 12) {
+                            Text("OR YOUR OWN").font(Hud.mono(11.5, .medium)).tracking(2.5).foregroundColor(Hud.dim)
+                            field("Your own wake word, one word", $custom, width: 200)
+                        }
+                        Text("You\u{2019}ll say: \u{201C}\(chosen), what\u{2019}s the weather?\u{201D}").font(Hud.mono(13.5)).foregroundColor(Hud.soft)
+                        label("WHAT I CALL YOU").padding(.top, 14)
+                        field("Your name", $name).focused($first)
+                        label("WEATHER").padding(.top, 14)
+                        HStack(spacing: 12) {
+                            field("Town or city", $city, width: 230)
+                            chip("\u{00B0}C", !fahrenheit, "Celsius") { fahrenheit = false }
+                            chip("\u{00B0}F", fahrenheit, "Fahrenheit") { fahrenheit = true }
+                        }
+                        label("BIRTHDAY").padding(.top, 14)
+                        HStack(spacing: 8) {
+                            chip("\u{2039}", false, "Month before") { month = month <= 1 ? 12 : month - 1 }
+                            Text(month == 0 ? "NOT SET" : "\(WelcomeScreen.monthNames[month - 1]) \(day)").font(Hud.mono(16, .semibold)).foregroundColor(month == 0 ? Hud.dim : .white).frame(width: 170)
+                                .accessibilityLabel(month == 0 ? "Birthday not set" : "Birthday, \(WelcomeScreen.monthNames[month - 1]) \(day)")
+                            chip("\u{203A}", false, "Month after") { month = (month % 12) + 1 }
+                            chip("\u{2212}", false, "Day before") { if month == 0 { month = 1 }; day = day > 1 ? day - 1 : 31 }
+                            chip("+", false, "Day after") { if month == 0 { month = 1 }; day = day < 31 ? day + 1 : 1 }
+                            chip("CLEAR", false, "Forget my birthday") { month = 0; day = 1 }
+                        }
+                    }
+                    .frame(width: 470, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 12) {
+                        label("PERSONALITY")
+                        ForEach(SettingsScreen.styles, id: \.key) { s in
+                            Button(action: { style = s.key }) {
+                                HStack(spacing: 14) {
+                                    Circle().fill(style == s.key ? Hud.green : Color.clear).frame(width: 12, height: 12)
+                                        .overlay(Circle().stroke(Hud.green.opacity(0.8), lineWidth: 1.5).frame(width: 20, height: 20)).frame(width: 22)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(s.title).font(Hud.mono(14.5, .bold)).tracking(2.5).foregroundColor(.white)
+                                        Text(s.sample).font(Hud.mono(12.5)).foregroundColor(Hud.soft.opacity(0.9))
+                                    }
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 14).padding(.vertical, 9)
+                                .background(RoundedRectangle(cornerRadius: 12).fill(Hud.panel.opacity(style == s.key ? 1 : 0.45)))
+                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Hud.green.opacity(style == s.key ? 0.9 : 0), lineWidth: 1.5))
+                            }
+                            .buttonStyle(.plain).focusRing()
+                            .accessibilityLabel(s.title.capitalized + ". " + s.sample + (style == s.key ? " Chosen." : ""))
+                        }
+                        label("HOW I FIT YOU").padding(.top, 10)
+                        tick("Listen for my name", $listen)
+                        tick("Start when I log in", $login)
+                        tick("Larger captions", $large)
+                        tick("High contrast", $contrast)
+                        tick("I play piano or make music", $plays)
+                    }
+                    .frame(width: 470, alignment: .leading)
+                }
+                Spacer(minLength: 16)
+                HStack(spacing: 16) {
+                    Button(action: { link.settings = false }) { Text("CANCEL").font(Hud.mono(14, .semibold)).tracking(3).foregroundColor(Hud.soft).padding(.horizontal, 18).padding(.vertical, 12) }
+                        .buttonStyle(.plain).focusRing().accessibilityLabel("Cancel, and change nothing")
+                    Button(action: save) {
+                        Text("SAVE").font(Hud.mono(16, .bold)).tracking(4).foregroundColor(.black)
+                            .padding(.horizontal, 52).padding(.vertical, 15)
+                            .background(RoundedRectangle(cornerRadius: 16).fill(Hud.green)).shadow(color: Hud.green.opacity(0.5), radius: 16)
+                    }
+                    .buttonStyle(.plain).focusRing().keyboardShortcut(.defaultAction).accessibilityLabel("Save these settings")
+                }
+                .padding(.bottom, 34)
+            }
+            .padding(.horizontal, 40)
+        }
+        .onAppear {
+            let p = savedProfile()
+            name = (p["user"] as? String) ?? ""
+            city = (p["city"] as? String) ?? ""
+            fahrenheit = (p["fahrenheit"] as? Bool) ?? false
+            plays = (p["plays"] as? Bool) ?? true
+            style = (p["style"] as? String) ?? link.style
+            if let b = p["birthday"] as? String, b.count == 5, let m = Int(b.prefix(2)), let d = Int(b.suffix(2)), (1...12).contains(m) { month = m; day = d }
+            let a = (p["assistant"] as? String) ?? link.assistant
+            if WelcomeScreen.names.contains(a) { wake = a } else { custom = a }
+            if NSWorkspace.shared.isVoiceOverEnabled, let w = NSApp.mainWindow ?? NSApp.windows.first {
+                NSAccessibility.post(element: w, notification: .announcementRequested, userInfo: [.announcement: "Settings. Tab moves between them. Return saves, Escape cancels.", .priority: NSAccessibilityPriorityLevel.high.rawValue])
+            }
+        }
+    }
+}
+
 // MARK: - In the background: a panel that appears when \(Link.shared.assistant) is spoken to, and a menu bar icon
 
 /// \(Link.shared.assistant) keeps running when its window is closed. While the window is away, or another app
@@ -2667,10 +2852,11 @@ final class MenuBar: NSObject, NSMenuDelegate {
         let menu = NSMenu()
         menu.delegate = self
         let open = NSMenuItem(title: "Open the window", action: #selector(openWindow), keyEquivalent: "")
-        let again = NSMenuItem(title: "Change my name, city or wake word\u{2026}", action: #selector(welcomeAgain), keyEquivalent: "")
+        let again = NSMenuItem(title: "Settings: wake word, name, personality\u{2026}", action: #selector(openSettings), keyEquivalent: ",")
+        let tour = NSMenuItem(title: "Run the welcome again", action: #selector(welcomeAgain), keyEquivalent: "")
         let quit = NSMenuItem(title: "Quit Nova", action: #selector(quitApp), keyEquivalent: "")
         let natural = NSMenuItem(title: "Install the natural voice\u{2026}", action: #selector(naturalVoice), keyEquivalent: "")
-        for i in [open, again, natural, .separator(), listening, panel, login, .separator(), quit] { i.target = self; menu.addItem(i) }
+        for i in [open, again, natural, .separator(), listening, panel, login, .separator(), tour, quit] { i.target = self; menu.addItem(i) }
         item.menu = menu
         self.item = item
     }
@@ -2683,6 +2869,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
     }
     @objc func openWindow() { AppDelegate.shared?.showWindow() }
     @objc func naturalVoice() { Link.shared.send("~say install the natural voice\n") }
+    @objc func openSettings() { Link.shared.welcome = false; Link.shared.settings = true; AppDelegate.shared?.showWindow() }
     @objc func welcomeAgain() { Link.shared.welcome = true; AppDelegate.shared?.showWindow() }
     @objc func toggleVoice() { VoiceControl.shared.toggle() }
     @objc func toggleLogin() { _ = LoginItem.set(!LoginItem.on) }
@@ -2744,8 +2931,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // The same single keys the Terminal window took. Command shortcuts stay with macOS.
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) { return event }
             let link = Link.shared
+            // Command and comma, as in every Mac app: the settings.
+            if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == ",", !link.welcome { link.settings = true; return nil }
+            if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) { return event }
+            // In the settings every key belongs to the fields and buttons there. Escape leaves without saving.
+            if link.settings { if event.keyCode == 53 { link.settings = false; return nil }; return event }
             if link.welcome { return link.welcomeKey?(event) == true ? nil : event }
             // Moving about with Tab: from then on Space and Return press the focused button, as anywhere
             // else on the Mac, until Escape hands those two keys back to the piano commands.
@@ -2881,6 +3072,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return
         }
         if CommandLine.arguments.contains("--update") { link.handle("update 1.2.0|Faster answers, and a new voice to choose.") }
+        if CommandLine.arguments.contains("--settings") { link.settings = true }
         if let i = CommandLine.arguments.firstIndex(of: "--welcome") { link.welcome = true; link.welcomeStepForSnapshot = Int(CommandLine.arguments[safe: i + 1] ?? "") ?? 0 }
         let view = NSHostingView(rootView: ContentView(link: link))
         view.frame = NSRect(x: 0, y: 0, width: 1240, height: 840)

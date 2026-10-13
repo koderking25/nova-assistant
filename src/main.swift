@@ -9,6 +9,7 @@ import Accelerate
 import CoreMIDI
 import AVFoundation
 import Darwin
+import ApplicationServices
 
 setvbuf(stdout, nil, _IONBF, 0)
 
@@ -873,6 +874,9 @@ final class Engine {
     var correcting: String? = nil         // a sentence it was told it got wrong, waiting to be put right
     var secondPass = false             // a loosely worded sentence is being retried in plain words
     var lastWakeAt = -100.0, lastWakeReply = "", wakeCount = 0
+    let bootedAt = now()
+    var asked = 0                  // how many things it has been asked since it started
+    var lastDone = ""              // the last request, in the person's own words
     var pretendReaper = false          // lets the self-test check REAPER sentences without REAPER
     var homeIdx = 0               // the item last named in the home menu
     var typing = "name"           // what the typed text is for: a name, or a question
@@ -957,6 +961,7 @@ final class Engine {
     func interrupt() {
         lock.lock(); gen += 1; lock.unlock()
         speaker.stop()
+        ears.cutOff()
         Kokoro.shared.duck(false)
         midi.allOff()
         lastSpokenAt = now() - 1
@@ -966,6 +971,7 @@ final class Engine {
         guard alive(g) else { return }
         lastSpoken = text
         lastSpokenAt = now() + 30      // still speaking
+        ears.spoke(text)
         speaker.say(text)
         lastSpokenAt = now()
         if pendingConfirm != nil || pendingSentence != nil { ears.expectAnswer() } else { ears.voiceFinished() }
@@ -1586,6 +1592,7 @@ func selfTest(_ engine: Engine, _ midi: MidiIO) -> Never {
     delightSelfTest(engine) { check($0, $1, $2) }
     dawSelfTest(engine) { check($0, $1, $2) }
     earsSelfTest(engine) { check($0, $1, $2) }
+    personalitySelfTest(engine) { check($0, $1, $2) }
     looseSelfTest(engine) { check($0, $1, $2) }
     learnSelfTest(engine) { check($0, $1, $2) }
     reaperSelfTest(engine) { check($0, $1, $2) }

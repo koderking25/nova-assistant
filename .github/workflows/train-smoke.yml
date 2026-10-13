@@ -1,0 +1,22 @@
+# Checks, on a Linux machine, that the wake-word training notebook works from start to finish with a
+# tiny amount of data. Started by hand only (Actions tab, "Run workflow"). It never runs by itself.
+name: Training notebook smoke test
+on:
+  workflow_dispatch:
+jobs:
+  smoke:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Make the folder Colab uses
+        run: sudo mkdir -p /content && sudo chown "$USER" /content
+      - name: Run the notebook's cells with tiny data
+        run: python3 eval/train/ci_smoke.py
+      - name: Keep the trial model
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trial-model
+          path: /content/models_trial_run/*.onnx
+          if-no-files-found: ignore

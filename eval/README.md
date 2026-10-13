@@ -55,3 +55,29 @@ Score the result on the test set with:
     python oww_custom.py set-nova 0.5 models/hey_nova.onnx models/nova.onnx
 
 Nothing here is used by the app. The app's wake-word system is unchanged.
+
+## Choosing a wake word (13 October 2026)
+
+All of this is with synthetic voices and Apple's on-device recogniser. No real microphone.
+
+**Quick test** (12 voices x 6 phrasings = 72 per name; how often the recogniser wrote the name). About 90 names were tried.
+Best: Maxwell 71, Julian 71, Benjamin 70, Jarvis 70, Sebastian 69, Apollo 69, Galaxy 68, Harmony 67, Amelia 66, Meridian 66,
+Watson 66, Gabriel 65, Phoenix 65. Worst: Atticus 29, Zenith 29, Atlas 29, Orion 30, Juno 32, Maestro 33, Edison 35, Kepler 36,
+Vega 36, Lumina 38, Cadence 38, Sonata 39, Figaro 39, Nova 40.
+
+**Harder test** for six finalists (`gen.py <folder> <Name> "<sound-alikes>"`, then `--wake-dir`, then `score_apple.py`): 600 recordings
+of the name in five conditions, 600 of ten words chosen to sound like it, 180 of ordinary talk; name taught to the recogniser,
+scored with Nova 1.2.2's rules.
+
+| Name | Heard (of 600) | In noise (of 120) | Over another voice (of 120) | Woke on its sound-alikes (of 600) | Woke in ordinary talk (of 180) |
+|---|---|---|---|---|---|
+| Sebastian | 511 (85%) | 109 | 81 | 51 ("Bastion", "Sebastopol") | 0 |
+| Julian | 507 (84%) | 112 | 56 | 285 ("Julia", "Julie", "Jillian") | 0 |
+| Maxwell | 506 (84%) | 90 | 80 | 96 ("Max will", "Makes well") | 0 |
+| Meridian | 476 (79%) | 101 | 48 | 19 | 0 |
+| Harmony | 425 (71%) | 96 | 52 | 83 ("Hominy"; heard as "How many") | 0 |
+| Apollo | 403 (67%) | 73 | 36 | 117 ("A polo", "Hello") | 0 |
+| Nova (its own sound-alike list) | 391 (65%) | 82 | 30 | 15 of 1,200 | 1 |
+
+Guidance from wake-word makers agrees with what was measured: at least six distinct sounds, three or more syllables, and a word
+that is rare in conversation ([Picovoice](https://picovoice.ai/docs/tips/choosing-a-wake-word/)).

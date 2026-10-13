@@ -2164,8 +2164,13 @@ enum WakeLab {
             var clips: [(String, String, URL)] = []
             for v in voices { for (i, p) in phrases.enumerated() {
                 let url = URL(fileURLWithPath: "\(dir)/\(v)-\(i).aiff")
+                // Some of the Mac's voices occasionally never finish writing a file. Each gets eight seconds.
+                try? FileManager.default.removeItem(at: url)
                 let t = Process(); t.executableURL = URL(fileURLWithPath: "/usr/bin/say"); t.arguments = ["-v", v, "-o", url.path, p]
-                try? t.run(); t.waitUntilExit()
+                try? t.run()
+                let limit = Date().addingTimeInterval(8)
+                while t.isRunning && Date() < limit { usleep(50_000) }
+                if t.isRunning { t.terminate(); try? FileManager.default.removeItem(at: url); continue }
                 if FileManager.default.fileExists(atPath: url.path) { clips.append((v, p, url)) }
             } }
             func pass(_ label: String, taught: Bool, then next: @escaping () -> Void) {

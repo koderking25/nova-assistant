@@ -7,7 +7,8 @@ rng = np.random.default_rng(7)
 voices = ["Alex", "Daniel", "Karen", "Moira", "Fred", "Kathy", "Ralph", "Reed", "Eddy", "Flo", "Junior", "Grandma"]
 name = sys.argv[2] if len(sys.argv) > 2 else "Nova"
 positives = [name, f"Hey {name}", f"{name}, what's the weather", f"{name} stop", f"so anyway. {name}, play some music", f"Okay {name}, what time is it", f"{name}, open Safari", f"{name}?"]
-similar = ["No", "No.", "Now", "Know", "Nope", "No way", "Noah", "Novel", "November", "Nobody", "Over", "Innovate", "Nevada", "Mocha", "Lava", "No, not now", "I know that", "Not over there", "No, I don't think so", "Now I know"]
+# Words that sound like the name. For another name, give its own list as the third argument, separated by "|".
+similar = sys.argv[3].split("|") if len(sys.argv) > 3 else ["No", "No.", "Now", "Know", "Nope", "No way", "Noah", "Novel", "November", "Nobody", "Over", "Innovate", "Nevada", "Mocha", "Lava", "No, not now", "I know that", "Not over there", "No, I don't think so", "Now I know"]
 talk = ["I don't know what time the movie starts, but no, I can't go now. Maybe over the weekend. Nobody told me about the new plan.",
         "We were over at the store and there was no bread left. Now we have to go back tomorrow, you know how it is in November.",
         "The novel she is reading is about a navy officer who moves to Nevada. No one knows why he left, not even his mother.",
@@ -15,8 +16,13 @@ talk = ["I don't know what time the movie starts, but no, I can't go now. Maybe 
         "He said no at first, then he said maybe, and now he says he never knew about it. I've no idea what is going on any more.",
         "Innovation is not about knowing everything. It is about noticing what nobody else has noticed, and then doing it over and over."]
 def say(voice, text, path, rate=None):
+    # Some voices occasionally never finish; each gets ten seconds, and a silent clip stands in if one fails.
     cmd = ["say", "-v", voice, "-o", path, "--data-format=LEI16@16000"] + (["-r", str(rate)] if rate else []) + [text]
-    subprocess.run(cmd, check=False)
+    if os.path.exists(path): os.remove(path)
+    try: subprocess.run(cmd, check=False, timeout=10)
+    except subprocess.TimeoutExpired: pass
+    if not os.path.exists(path):
+        with wave.open(path, "wb") as w: w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(b"\0\0" * 8000)
 def read(path):
     with wave.open(path) as w: return np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").astype(np.float32) / 32768
 def write(path, x):

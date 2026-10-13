@@ -72,6 +72,7 @@ scored with Nova 1.2.2's rules.
 | Name | Heard (of 600) | In noise (of 120) | Over another voice (of 120) | Woke on its sound-alikes (of 600) | Woke in ordinary talk (of 180) |
 |---|---|---|---|---|---|
 | Sebastian | 511 (85%) | 109 | 81 | 51 ("Bastion", "Sebastopol") | 0 |
+| Jarvis (with its extra sound-alike rules) | 538 (90%) | 112 | 80 | 224 ("Service", "Travis", "Nervous", "Harvest") | 0 |
 | Julian | 507 (84%) | 112 | 56 | 285 ("Julia", "Julie", "Jillian") | 0 |
 | Maxwell | 506 (84%) | 90 | 80 | 96 ("Max will", "Makes well") | 0 |
 | Meridian | 476 (79%) | 101 | 48 | 19 | 0 |

@@ -82,3 +82,8 @@ scored with Nova 1.2.2's rules.
 
 Guidance from wake-word makers agrees with what was measured: at least six distinct sounds, three or more syllables, and a word
 that is rare in conversation ([Picovoice](https://picovoice.ai/docs/tips/choosing-a-wake-word/)).
+
+**Brand-style names, quick test (13 October, of 72):** Veronica 72, Genesis 71, Roxanne 70, Kassandra 70, Alexis 66, Arcadia 65,
+Zodiac 62, Lennox 60, Pixel 60, Valencia 60, Avalon 56, Solara 54, Geneva 53, Quantum 53, Matrix 52, Felix 50, Vortex 49,
+Indigo 49, Sapphire 49, Sienna 49, Calista 49, Seraphina 49, Dexter 48, Nexus 47, Ophelia 47, Olympia 45, Helix 37, Moxie 37,
+Vesper 35, Odyssey 31. Words with an "x" did not do well with Apple's recogniser, whatever is said about "Alexa".

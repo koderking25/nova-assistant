@@ -977,6 +977,17 @@ final class Engine {
         if pendingConfirm != nil || pendingSentence != nil { ears.expectAnswer() } else { ears.voiceFinished() }
     }
 
+    /// Said outside any conversation (an alarm, a reminder, the voice download's progress). The ears are
+    /// still told, so this too is known as its own voice and not taken for someone calling it.
+    func announce(_ text: String) {
+        lastSpoken = text
+        lastSpokenAt = now() + 30
+        ears.spoke(text)
+        speaker.say(text)
+        lastSpokenAt = now()
+        ears.voiceFinished()
+    }
+
     func play(_ events: [Ev], _ g: Int) {
         if Opt.fast { return }
         // When the band plays, the piano part is played here too, on the Mac's own piano, so the
@@ -1593,6 +1604,7 @@ func selfTest(_ engine: Engine, _ midi: MidiIO) -> Never {
     dawSelfTest(engine) { check($0, $1, $2) }
     earsSelfTest(engine) { check($0, $1, $2) }
     personalitySelfTest(engine) { check($0, $1, $2) }
+    ownVoiceReplayTest(engine) { check($0, $1, $2) }
     looseSelfTest(engine) { check($0, $1, $2) }
     learnSelfTest(engine) { check($0, $1, $2) }
     reaperSelfTest(engine) { check($0, $1, $2) }

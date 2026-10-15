@@ -156,7 +156,7 @@ extension Engine {
         if Opt.fast || Opt.textMode { return }
         if let v = try? String(contentsOf: Updater.doneFile, encoding: .utf8) {
             try? FileManager.default.removeItem(at: Updater.doneFile)
-            DispatchQueue.global().asyncAfter(deadline: .now() + 6) { while self.lastSpokenAt > now() { usleep(300_000) }; self.speaker.say("I've updated myself. This is version \(v.trimmingCharacters(in: .whitespacesAndNewlines)).") }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 6) { while self.lastSpokenAt > now() { usleep(300_000) }; self.announce("I've updated myself. This is version \(v.trimmingCharacters(in: .whitespacesAndNewlines)).") }
         }
         func loop(after seconds: Double) {
             DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + seconds) {

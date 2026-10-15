@@ -8,8 +8,8 @@
 # To release an update: raise "version", say what is new in "notes", run ./build.sh, then deploy the site.
 set -e
 cd "$(dirname "$0")"
-version="1.3.0"
-notes="I no longer wake myself up, settings are now one quick screen, and I have a personality you can choose."
+version="1.3.1"
+notes="I no longer mistake my own voice for you, even when I say my name several times, and I listen better with names you make up."
 
 work="$(mktemp -d)"
 app="dist/Nova.app"

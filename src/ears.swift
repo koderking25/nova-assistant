@@ -19,9 +19,9 @@ final class Ears {
     private var softUntil = 0.0       // until when a request counts as following a merely possible name
     private var lastChatter = 0.0     // when ordinary talk, not meant for it, was last heard
     private var credits: [Double] = []   // one for each time it has said its own name and may yet hear it back; each has a time it lapses
-    private var regionKey = ""        // the dealt-with text that the stretch now being counted follows
-    private var regionSeen = 0, regionCredits = 0, regionWords = 0
-    private var nameIsReal = false    // a name in the current stretch was said by a person, not by itself
+    private var owners: [Bool] = []   // for each name in the recogniser's text so far: true if it was its own voice
+    private var sessionOver = false   // the recogniser finished its text; the next one starts afresh
+    private var nameIsReal = false    // a name not yet dealt with was said by a person, not by itself
 
     /// The assistant is about to say this. Each time its own name is in it, the microphone may hand that name back.
     func spoke(_ text: String) {
@@ -287,23 +287,26 @@ final class Ears {
         // may hand that name back. A name in the transcript is first set against those notes; only a
         // name left over after that was said by a person. This is counted over the whole stretch of
         // transcript still to be dealt with, so the recogniser rewriting its text cannot count a name twice.
+        // Each name in the recogniser's whole text is given an owner once, in order, and keeps it while the
+        // text is rewritten. Names taken back by a rewrite give their note back.
         credits.removeAll { $0 < t }
-        let stretch = Ears.words(fresh)
-        let namesNow = stretch.filter { $0 == "jarvis" }.count
-        if regionKey != handled {
-            regionKey = handled; regionSeen = 0; regionCredits = 0; nameIsReal = false
-        } else if stretch.count < regionWords {
-            // Rewritten and shorter: count it afresh, giving back what had been set against its own voice.
-            credits.insert(contentsOf: Array(repeating: speaking ? Double.infinity : t + 3, count: regionCredits), at: 0)
-            regionSeen = 0; regionCredits = 0; nameIsReal = false
+        if sessionOver {
+            // A new stretch of listening: anything of its own still owed may yet arrive, but only briefly.
+            credits += Array(repeating: speaking ? Double.infinity : t + 2, count: owners.filter { $0 }.count)
+            owners = []; sessionOver = false
         }
-        regionWords = stretch.count
-        if namesNow > regionSeen {
-            for _ in 0..<(namesNow - regionSeen) {
-                if !credits.isEmpty { credits.removeFirst(); regionCredits += 1 } else { nameIsReal = true }
-            }
+        let allNames = Ears.words(Ears.tidy(text)).filter { $0 == "jarvis" }.count
+        while owners.count > allNames {
+            if owners.removeLast() { credits.insert(speaking ? Double.infinity : t + 3, at: 0) }
         }
-        regionSeen = namesNow
+        while owners.count < allNames {
+            if !credits.isEmpty { credits.removeFirst(); owners.append(true) } else { owners.append(false) }
+        }
+        if final { sessionOver = true }
+        // Only the names in the part not yet dealt with matter now.
+        let before = text.hasPrefix(handled) && !handled.isEmpty ? Ears.words(Ears.tidy(handled)).filter { $0 == "jarvis" }.count : 0
+        let namesNow = Ears.words(fresh).filter { $0 == "jarvis" }.count
+        nameIsReal = owners.dropFirst(min(before, owners.count)).contains(false)
         // A name that was only its own voice coming back is taken out, so nothing below mistakes it for a call.
         if namesNow > 0, !nameIsReal { fresh = fresh.split(separator: " ").filter { Ears.words(String($0)).first != "jarvis" }.joined(separator: " ") }
         if speaking || quietFor < 0.6 {
@@ -588,5 +591,79 @@ func earsSelfTest(_ engine: Engine, _ check: (String, Bool, String) -> Void) {
     check("ears: the name can come at the end of the sentence", tail == "acted" && engine.mode == .compose, tail)
     engine.goHomeQuietly()
     check("ears: an unfinished sentence is waited for, a finished one is acted on quickly", waits == [1.5, 0.45, 0.9, 0.22, 0.35] && Ears.wait(for: "play smooth", final: false, pause: 0.45) == 1.1 && Ears.wait(for: "play smooth jazz on youtube", final: false, pause: 0.45) == 0.45, waits.map { String($0) }.joined(separator: ", "))
+    engine.goHomeQuietly()
+}
+
+/// Its own sentences, as the Mac's recogniser actually wrote them down from recordings of its natural voice,
+/// with a wake word a friend chose (Houstin). Fed in word by word, as the recogniser reports them, with the
+/// text taken back and rewritten now and then, and once more after it stops: none may wake it or cut it off.
+func ownVoiceReplayTest(_ engine: Engine, _ check: (String, Bool, String) -> Void) {
+    let kept = Profile.current
+    defer { Profile.current = kept }
+    Profile.current.assistant = "Houstin"
+    let heard: [(said: String, wrote: String)] = [
+        ("All set, Sam. I'm Houstin. Whenever you need me, say Houstin, then what you'd like. Try: Houstin, what can you do?", "All set Sam I'm Houstin whenever you need me say Houston than what you'd like try Houstin what can you do"),
+        ("All set, Sam. I'm Houstin. Whenever you need me, say Houstin, then what you'd like. Try: Houstin, what can you do?", "All set Sam I'm Houstin whenever you need me say Houston and then what you'd like try Houstin and what can you do"),
+        ("All set, Sam. I'm Houstin. Whenever you need me, say Houstin, then what you'd like. Try: Houstin, what can you do?", "All set Sam I'm Houstin whenever you need me say Houstin then what you'd like try Houstin what can you do"),
+        ("From now on, call me Houstin.", "From now on call me Houstin"),
+        ("From now on, call me Houstin.", "From now on call me Houstin"),
+        ("From now on, call me Houstin.", "From now on call me Houstin"),
+        ("I'm Houstin. Say Houstin, then what you'd like.", "I'm Houstin say Houstin then what you'd like"),
+        ("I'm Houstin. Say Houstin, then what you'd like.", "I'm Houstin say Houstin than what you'd like"),
+        ("I'm Houstin. Say Houstin, then what you'd like.", "I'm Houstin say Houstin then what you'd like"),
+        ("Change my name from Nova to Houstin? Say yes or no.", "Change my name from nova to Houstin say yes or no"),
+        ("Change my name from Nova to Houstin? Say yes or no.", "Change my name from nova to Houstin say yes or no"),
+        ("Change my name from Nova to Houstin? Say yes or no.", "Change my name from nova to Houstin say yes or no"),
+        ("Done. From now on, call me Houstin. Nova won't work any more.", "Done from now on call me Houstin nova won't work anymore"),
+        ("Done. From now on, call me Houstin. Nova won't work any more.", "Done from now on call me Houstin nova won't work anymore"),
+        ("Done. From now on, call me Houstin. Nova won't work any more.", "Done from now on call me Houstin nova won't work anymore"),
+        ("All set, Sam. I'm Houston. Whenever you need me, say Houston, then what you'd like. Try: Houston, what can you do?", "All set Sam I'm Houstin whenever you need me say Houstin then what you'd like try Houstin what can you do"),
+        ("All set, Sam. I'm Houston. Whenever you need me, say Houston, then what you'd like. Try: Houston, what can you do?", "All set Sam I'm Houstin whenever you need me say Houstin then what you'd like try Houstin what can you do"),
+        ("All set, Sam. I'm Houston. Whenever you need me, say Houston, then what you'd like. Try: Houston, what can you do?", "All set Sam I'm Houstin whenever you need me say Houstin then what you'd like try Houstin what can you do"),
+        ("From now on, call me Houston.", "From now on call me Houstin"),
+        ("From now on, call me Houston.", "From now on call me Houstin"),
+        ("From now on, call me Houston.", "From now on call me Houstin"),
+        ("I'm Houston. Say Houston, then what you'd like.", "I'm Houstin say Houstin than what you'd like"),
+        ("I'm Houston. Say Houston, then what you'd like.", "I'm Houstin say Houstin then what you'd like"),
+        ("I'm Houston. Say Houston, then what you'd like.", "I'm Houstin say Houstin then what you'd like"),
+        ("Change my name from Nova to Houston? Say yes or no.", "Change my name from nova to Houstin say yes or no"),
+        ("Change my name from Nova to Houston? Say yes or no.", "Change my name from nova to Houstin say yes or no"),
+        ("Change my name from Nova to Houston? Say yes or no.", "Change my name from nova to Houstin say yes or no"),
+        ("Done. From now on, call me Houston. Nova won't work any more.", "Done from now on call me Houstin nova won't work anymore"),
+        ("Done. From now on, call me Houston. Nova won't work any more.", "Done from now on call me Houstin nova won't work anymore"),
+        ("Done. From now on, call me Houston. Nova won't work any more.", "Done from now on call me Houstin nova won't work anymore")]
+    var bad: [String] = []
+    for (said, wrote) in heard {
+        engine.goHomeQuietly()
+        let ears = Ears()
+        engine.lastSpoken = said
+        ears.spoke(said)
+        engine.lastSpokenAt = now() + 30
+        let w = wrote.split(separator: " ").map(String.init)
+        var got: [String] = []
+        for n in 1...w.count {
+            got.append(ears.partial(w.prefix(n).joined(separator: " "), final: false, engine: engine))
+            if n % 4 == 0, n > 1 { got.append(ears.partial(w.prefix(n - 1).joined(separator: " "), final: false, engine: engine)) }   // taken back
+        }
+        let cut = engine.lastSpokenAt <= now()
+        engine.lastSpokenAt = now()
+        ears.voiceFinished()
+        got.append(ears.partial(wrote, final: true, engine: engine))
+        // The recogniser starting afresh with only the end of the sentence.
+        got.append(ears.partial(w.suffix(5).joined(separator: " "), final: true, engine: engine))
+        if got.contains("acted") || cut { bad.append("\(wrote) -> \(got.joined(separator: ","))\(cut ? " (cut off)" : "")") }
+    }
+    engine.goHomeQuietly()
+    // And a person saying the name straight after it has finished speaking is still answered.
+    let ears = Ears()
+    engine.lastSpoken = heard[0].said
+    ears.spoke(heard[0].said)
+    engine.lastSpokenAt = now() + 30
+    _ = ears.partial(heard[0].wrote, final: false, engine: engine)
+    engine.lastSpokenAt = now() - 1
+    ears.voiceFinished()
+    ears.lapseCreditsForTest()
+    let person = ears.partial(heard[0].wrote + " Houston what's the weather", final: true, engine: engine)
+    check("ears: its own recorded sentences with a custom name never wake it, and a person right after still does", bad.isEmpty && person == "acted", bad.prefix(3).joined(separator: " | ") + " person: " + person)
     engine.goHomeQuietly()
 }

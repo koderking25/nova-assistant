@@ -743,7 +743,7 @@ extension Engine {
             self.chime([79, 84, 79, 84])
             ui("flash good")
             let amount = seconds >= 60 ? "\(seconds / 60) minute\(seconds / 60 == 1 ? "" : "s")" : "\(seconds) seconds"
-            self.speaker.say(label.isEmpty ? "Time. \(amount) are up." : "\(You.name), a reminder: \(label).")
+            self.announce(label.isEmpty ? "Time. \(amount) are up." : "\(You.name), a reminder: \(label).")
         }
     }
 

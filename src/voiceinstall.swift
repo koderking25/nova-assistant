@@ -131,13 +131,13 @@ extension Engine {
         if Opt.fast { run { g in self.say("Installing.", g) }; return }
         VoiceInstaller.running = true
         VoiceInstaller.cancelled = false
-        if let line = opening { DispatchQueue.global().async { while self.lastSpokenAt > now() { usleep(200_000) }; self.speaker.say(line) } }
+        if let line = opening { DispatchQueue.global().async { while self.lastSpokenAt > now() { usleep(200_000) }; self.announce(line) } }
         DispatchQueue.global(qos: .utility).async {
             let problem = VoiceInstaller.install { step in
                 ui("now Fetching the natural voice")
                 if quiet { return }
                 while self.lastSpokenAt > now() { usleep(200_000) }
-                self.speaker.say(step)
+                self.announce(step)
             }
             if VoiceInstaller.cancelled { VoiceInstaller.running = false; return }
             VoiceInstaller.running = false
@@ -145,11 +145,11 @@ extension Engine {
             if let p = problem {
                 self.noteMistake("the natural voice did not install", p)
                 // When it was fetching by itself, a failure is not announced: it simply tries again next time.
-                if !quiet { self.speaker.say(p) }
+                if !quiet { self.announce(p) }
                 return
             }
             Kokoro.shared.start()
-            guard Kokoro.shared.available() else { self.speaker.say("Everything downloaded, but the voice wouldn't start. Quit Nova and open it again, and it should be there."); return }
+            guard Kokoro.shared.available() else { self.announce("Everything downloaded, but the voice wouldn't start. Quit Nova and open it again, and it should be there."); return }
             ui("voice " + Kokoro.shared.name + " (Kokoro)")
             self.run { g in self.say("And this is my natural voice. Much better, isn't it? Say next voice to try the others, or audition the voices to hear them all.", g) }
         }

@@ -74,7 +74,7 @@ extension Engine {
             Keepsakes.save()
             for _ in 0..<3 { self.chime([79, 84, 88, 84]); usleep(700_000) }
             ui("flash good")
-            self.speaker.say("\(You.name), it's \(self.spokenTime(Date())). This is your alarm.")
+            self.announce("\(You.name), it's \(self.spokenTime(Date())). This is your alarm.")
         }
     }
 

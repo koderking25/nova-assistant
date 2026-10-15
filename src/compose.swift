@@ -511,7 +511,7 @@ extension Engine {
             Weather.latest = nil; Weather.refresh()
             ui("name \(Me.name)|\(You.name)")
             sendVocabulary()
-            run { g in self.say("All set\(Profile.current.user.isEmpty ? "" : ", \(You.name)"). I'm \(Me.name). Whenever you need me, say \(Me.name), then what you'd like. Try: \(Me.name), what can you do?", g); self.fetchVoiceIfWanted(announce: true) }
+            run { g in self.say("All set\(Profile.current.user.isEmpty ? "" : ", \(You.name)"). I'm \(Me.name). Call me by name, then say what you'd like. Ask me what I can do, any time.", g); self.fetchVoiceIfWanted(announce: true) }
             return
         }
         // The settings screen: everything at once, applied straight away, and only what changed is mentioned.

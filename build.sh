@@ -9,7 +9,7 @@
 set -e
 cd "$(dirname "$0")"
 version="1.3.1"
-notes="I no longer mistake my own voice for you, even when I say my name several times, and I listen better with names you make up."
+notes="I no longer mistake my own voice for you, even when I say my own name several times in one sentence."
 
 work="$(mktemp -d)"
 app="dist/Nova.app"

@@ -1112,6 +1112,10 @@ final class Engine {
     }
 
     // Soft bell sounds on the built-in music box, used in place of spoken comments.
+    /// The little sounds ("I heard you", "thinking", "well done") are off unless switched on. Alarms and timers always ring.
+    static let effectsFile = baseDir.appendingPathComponent("sound-effects.txt")
+    static var effects = ((try? String(contentsOf: effectsFile, encoding: .utf8)) ?? "").hasPrefix("1")
+
     func chime(_ notes: [Int], vel: UInt8 = 58, hold: Double = 0.6) {
         if Opt.fast { return }
         for (i, n) in notes.enumerated() {
@@ -1466,7 +1470,7 @@ final class Engine {
         var verdict = mistakes == 0 ? pick(["That's correct. ", "Yes, that's right. ", "That's it, well done. ", "Spot on. "])
                                     : (mistakes == 1 ? "Done, with one wrong note. " : "Done, with \(mistakes) wrong notes. ")
         if let v = verdictOverride { verdict = v; verdictOverride = nil }
-        if mistakes == 0 { chime([84, 88, 91]); ui("flash good") }
+        if mistakes == 0 { if Engine.effects { chime([84, 88, 91]) }; ui("flash good") }
         if unitIdx + 1 >= l.units.count, jazzIdx != nil {
             // The study is learned: bring in the band.
             unitIdx = 0
@@ -1604,6 +1608,8 @@ func selfTest(_ engine: Engine, _ midi: MidiIO) -> Never {
     dawSelfTest(engine) { check($0, $1, $2) }
     earsSelfTest(engine) { check($0, $1, $2) }
     personalitySelfTest(engine) { check($0, $1, $2) }
+    builtInAISelfTest(engine) { check($0, $1, $2) }
+    goonSelfTest(engine) { check($0, $1, $2) }
     ownVoiceReplayTest(engine) { check($0, $1, $2) }
     looseSelfTest(engine) { check($0, $1, $2) }
     learnSelfTest(engine) { check($0, $1, $2) }
@@ -1790,6 +1796,34 @@ if let i = args.firstIndex(of: "--reband"), i + 2 < CommandLine.arguments.count 
     _ = writeMIDIFile(URL(fileURLWithPath: CommandLine.arguments[i + 2]), bpm: 120, tracks: ([("Piano", take)] + bandTracks(band)).filter { !$0.notes.isEmpty })
     exit(0)
 }
+// "--brain-test": starts the built-in brain and asks it a few things, with timings.
+if args.contains("--brain-test") {
+    var t = now()
+    let ok = BuiltInAI.start()
+    print(String(format: "start: %@ in %.2f s", ok ? "ok" : "FAILED", now() - t))
+    for q in ["how many sharps are in E major", "open my web browser", "you talk a bit quick for me", "what's a fun fact about octopuses", "play some lofi on youtube", "who wrote the moonlight sonata"] {
+        t = now()
+        let a = BuiltInAI.ask("They say: \(q)", instructions: LocalAI.persona) ?? "(nothing)"
+        print(String(format: "%.2f s | %@ -> %@", now() - t, q, a.replacingOccurrences(of: "\n", with: " ")))
+    }
+    BuiltInAI.stop()
+    exit(0)
+}
+// "--voice-test <folder> <voice>": the built-in natural voice says a few sentences into WAV files, with timings.
+if let i = args.firstIndex(of: "--voice-test"), i + 1 < args.count {
+    let out = URL(fileURLWithPath: args[i + 1]), voice = args.count > i + 2 ? args[i + 2] : "bm_george"
+    var t = now()
+    let ok = SherpaVoice.load(british: voice.hasPrefix("b"))
+    print(String(format: "load: %@ in %.2f s", ok ? "ok" : "FAILED", now() - t))
+    for (n, line) in ["Yes, Neil?", "Good evening. It's twelve degrees and cloudy in Brantford, with light rain later.", "Goon mode. Activated. Lights up, band in, here we go."].enumerated() {
+        t = now()
+        let f = out.appendingPathComponent("line\(n).wav")
+        let wrote = SherpaVoice.write(line, voice: voice, speed: 1.06, to: f)
+        let secs = Double(((try? f.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 44) - 44) / 48000
+        print(String(format: "%@: %.2f s to make %.2f s of speech", wrote ? "ok" : "FAILED", now() - t, secs))
+    }
+    exit(0)
+}
 if let i = args.firstIndex(of: "--speak"), i + 1 < CommandLine.arguments.count {
     // Says one thing aloud with the Kokoro voice and reports how long it took to begin.
     if args.contains("--mute") { Opt.voiceVolume = 0 }          // for checking timing without making a sound
@@ -1903,6 +1937,13 @@ if args.contains("--install-voice") {
     print(String(format: "%5.0f s  %@", now() - t, problem ?? "installed"))
     exit(problem == nil ? 0 : 1)
 }
+if args.contains("--install-brain") {
+    let t = now()
+    let problem = BuiltInAI.install { print(String(format: "%5.0f s  %@", now() - t, $0)) }
+    print(String(format: "%5.0f s  %@", now() - t, problem ?? "installed"))
+    BuiltInAI.stop()
+    exit(problem == nil ? 0 : 1)
+}
 if args.contains("--library") {
     // Prints one line per song, for checking the library without starting the tool.
     for s in loadLibrary() {
@@ -1916,7 +1957,7 @@ if args.contains("--library") {
 }
 // Checks run from the command line must never disturb the copy the player is using, and a check
 // given too few arguments must stop here, not carry on and start up as a second the assistant.
-let checkFlags = ["--selftest", "--route", "--chat", "--lookup", "--reband", "--speak", "--ask", "--library", "--daw-test", "--reaper-test", "--new-logic-project", "--mute", "--cold", "--reaper", "--sound-check", "--install-voice", "--update-test", "--wake-score"]
+let checkFlags = ["--brain-test", "--voice-test", "--selftest", "--route", "--chat", "--lookup", "--reband", "--speak", "--ask", "--library", "--daw-test", "--reaper-test", "--new-logic-project", "--mute", "--cold", "--reaper", "--sound-check", "--install-voice", "--install-brain", "--update-test", "--wake-score"]
 let isCheck = args.contains { checkFlags.contains($0) }
 if !isCheck, instanceLock >= 0 { becomeOnlyCopy() }
 let midi = MidiIO()
@@ -2021,6 +2062,7 @@ func quit(_ reason: String = "Q pressed", code: Int32 = 0) -> Never {
     engine.autosaveTake()
     Kokoro.shared.shutDown()
     AISession.shared.shutDown()
+    BuiltInAI.stop()
     logLine("stopped: \(reason)")
     // Leaving must never hang, whatever the audio system is doing: if a tidy exit has not
     // happened within a second and a half, the program is simply ended.
@@ -2186,6 +2228,7 @@ if !Profile.current.done {
     ui("welcome 1")
 } else {
     engine.fetchVoiceIfWanted(announce: false)        // an interrupted download carries on quietly
+    engine.fetchBrainIfWanted(announce: false)
     let parts = engine.greetingParts()
     let learnTop = engine.awaitingTop
     engine.run { g in

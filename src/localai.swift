@@ -12,7 +12,10 @@ import FoundationModels
 #endif
 
 enum LocalAI {
-    static var available: Bool {
+    /// A model on this Mac: Apple's own when there is one, otherwise Nova's built-in brain once it is installed.
+    static var available: Bool { apple || BuiltInAI.installed }
+
+    static var apple: Bool {
         #if canImport(FoundationModels)
         if #available(macOS 26.0, *) {
             if case .available = SystemLanguageModel.default.availability { return true }
@@ -75,9 +78,10 @@ enum LocalAI {
 
     /// One turn of the conversation. Returns nil if the model could not answer.
     static func ask(_ prompt: String, instructions: String) -> String? {
+        if !apple { return BuiltInAI.ask(prompt, instructions: instructions) }
         #if canImport(FoundationModels)
         if #available(macOS 26.0, *) {
-            guard available else { return nil }
+            guard apple else { return nil }
             lock.lock(); defer { lock.unlock() }
             // The model holds only a short conversation, so it is started afresh every few turns.
             if session == nil || made != instructions || turns >= 6 {
@@ -109,8 +113,9 @@ enum LocalAI {
 
     /// Loads the model ahead of the first question, so that one is not slow.
     static func prewarm() {
+        if !apple, BuiltInAI.installed { DispatchQueue.global(qos: .utility).async { BuiltInAI.start() }; return }
         #if canImport(FoundationModels)
-        if #available(macOS 26.0, *), available {
+        if #available(macOS 26.0, *), apple {
             DispatchQueue.global(qos: .utility).async { LanguageModelSession(instructions: "Be brief.").prewarm() }
         }
         #endif

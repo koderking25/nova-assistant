@@ -8,8 +8,8 @@
 # To release an update: raise "version", say what is new in "notes", run ./build.sh, then deploy the site.
 set -e
 cd "$(dirname "$0")"
-version="1.3.1"
-notes="I no longer mistake my own voice for you, even when I say my own name several times in one sentence."
+version="1.4.0"
+notes="A brain of my own that works on any Mac with no internet, a natural voice that installs in one step and starts in a second, no more little sound effects, smoother animation, and goon mode."
 
 work="$(mktemp -d)"
 app="dist/Nova.app"
@@ -19,7 +19,7 @@ print "// Written by build.sh. The version of this build.\nlet novaVersion = \"$
 
 echo "Building the engine…"
 for arch in arm64 x86_64; do
-  swiftc -O -swift-version 5 -target $arch-apple-macos13.0 src/*.swift -o "$work/engine-$arch" 2> "$work/engine-$arch.log" || { grep error -A4 "$work/engine-$arch.log" | head -20; exit 1; }
+  swiftc -O -swift-version 5 -target $arch-apple-macos13.0 -import-objc-header src/sherpa/c-api.h src/*.swift -o "$work/engine-$arch" 2> "$work/engine-$arch.log" || { grep error -A4 "$work/engine-$arch.log" | head -20; exit 1; }
 done
 lipo -create "$work/engine-arm64" "$work/engine-x86_64" -output "$payload/nova-engine"
 

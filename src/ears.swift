@@ -442,7 +442,7 @@ final class Ears {
                 if got == "ignored" { self.log("let a remark go by"); outcome = "ignored" }
                 return
             }
-            if !clean.isEmpty { engine.chime([96], vel: 30, hold: 0.06) }
+            if !clean.isEmpty, Engine.effects { engine.chime([96], vel: 30, hold: 0.06) }
             engine.hear(clean)
         }
         if Opt.fast { lock.unlock(); act(); lock.lock(); return outcome }

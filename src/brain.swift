@@ -165,6 +165,8 @@ extension Engine {
             return "settings"
         }
         if let done = personalityHear(h) { return done }
+        if let done = brainHear(h) { return done }
+        if let done = goonHear(h) { return done }
         if !h.text.isEmpty { lastDone = h.text }
         if let done = voiceInstallHear(h) { return done }
         if let done = extrasHear(h) { return done }

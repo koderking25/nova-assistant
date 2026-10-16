@@ -158,7 +158,7 @@ extension Engine {
     /// The names the Mac's speech recogniser should expect to hear.
     func sendVocabulary() {
         var vocab = [Me.name, "Hey \(Me.name)", "composition", "metronome", "REAPER", "Logic Pro", "ear training", "jazz lesson", "lullaby", "reverb", "compressor", "threshold",
-                     "equalizer", "preset", "plugin", "band louder", "band quieter", "play my album", "jam with me", "play it back", "what did I just play"]
+                     "equalizer", "preset", "plugin", "band louder", "band quieter", "play my album", "jam with me", "play it back", "what did I just play", "goon mode", "activate goon mode", "end goon mode"]
         vocab += songs.filter { $0.level >= 2 }.map { $0.name.components(separatedBy: ",")[0] }
         vocab += ["Spotify", "on Spotify", "on YouTube", "Google Chrome", "YouTube", "Microsoft Word", "System Settings", "Safari", "OneDrive", "Downloads", "the weather", "look up"]
         ui("vocab " + Array(Set(vocab)).prefix(90).joined(separator: "|"))

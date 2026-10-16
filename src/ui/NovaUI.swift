@@ -117,6 +117,7 @@ final class Link: ObservableObject {
     @Published var updateNotes = ""
     @Published var welcome = false         // the first-run questions are on screen
     @Published var settings = false        // the one-screen settings are on screen
+    @Published var goon = false            // goon mode: neon frame and title over everything
     @Published var style = (savedProfile()["style"] as? String) ?? "classic"
     var welcomeKey: ((NSEvent) -> Bool)?   // the welcome's own handling of arrow keys; true means "that was mine"
     var tabbing = false                    // Tab has been used: Space and Return then press the control the keyboard is on
@@ -492,6 +493,7 @@ final class Link: ObservableObject {
         case "welcome": welcome = true; AppDelegate.shared?.showWindow()
         case "settings": settings = true; AppDelegate.shared?.showWindow()
         case "style": style = rest
+        case "goon": goon = rest == "1"
         case "update":
             let parts = rest.components(separatedBy: "|")
             updateVersion = parts[0].trimmingCharacters(in: .whitespaces)
@@ -703,10 +705,64 @@ let commandGroups: [(String, [Command])] = [
 // Everything the tool signals by sound is also shown: a wrong note frames the window in red
 // for a moment, a part played right frames it in green, and the metronome pulses on each beat.
 
+/// Goon mode: a neon frame that breathes with the music and the voice, and a title with a
+/// split-colour glitch. With Reduce Motion switched on in the Mac's settings, it holds still.
+struct GoonOverlay: View {
+    @ObservedObject var link: Link
+    private let still = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    var body: some View {
+        TimelineView(BusySchedule(busy: { !still }, fast: 1.0 / 30, idle: 1)) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            let now = Link.clock()
+            // Louder with every note the band plays and every word spoken.
+            let notes = link.echoes.suffix(12).filter { now - $0.at < 0.25 }.count + link.ripples.suffix(12).filter { now - $0.at < 0.25 }.count
+            let energy = min(1, 0.35 + Double(notes) * 0.12 + (link.speaking ? 0.25 : 0))
+            let hue = still ? 0.85 : (t * 0.08).truncatingRemainder(dividingBy: 1)
+            let a = Color(hue: hue, saturation: 0.9, brightness: 1), b = Color(hue: (hue + 0.45).truncatingRemainder(dividingBy: 1), saturation: 0.9, brightness: 1)
+            let jitter = still ? 0 : (sin(t * 37) * sin(t * 13) > 0.6 ? CGFloat(sin(t * 91) * 6) : 0)
+            ZStack {
+                // The glow is two wider, fainter frames behind the bright one: no blur, so it costs almost nothing to draw.
+                ForEach(0..<3) { k in
+                    RoundedRectangle(cornerRadius: 18)
+                        .strokeBorder(AngularGradient(colors: [a, b, a], center: .center, angle: .degrees(still ? 0 : t * 90)), lineWidth: (6 + 8 * energy) * CGFloat([1, 2.6, 4.5][k]))
+                        .opacity([1, 0.28, 0.12][k] * (k == 0 ? 1 : energy))
+                        .padding(6)
+                }
+                VStack {
+                    ZStack {
+                        Text("GOON MODE").foregroundColor(Color(red: 1, green: 0.1, blue: 0.5).opacity(0.8)).offset(x: -3 - jitter, y: 0)
+                        Text("GOON MODE").foregroundColor(Color(red: 0.1, green: 0.9, blue: 1).opacity(0.8)).offset(x: 3 + jitter, y: 0)
+                        Text("GOON MODE").foregroundColor(.white)
+                    }
+                    .font(.system(size: 54, weight: .black, design: .monospaced)).tracking(10)
+                    .shadow(color: a.opacity(0.9), radius: 22)
+                    .scaleEffect(1 + 0.04 * energy)
+                    .padding(.top, 54)
+                    Text("SAY \u{201C}END GOON MODE\u{201D} TO COME BACK DOWN").font(Hud.mono(13, .bold)).tracking(4).foregroundColor(.white.opacity(0.75)).padding(.top, 6)
+                    Spacer()
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityElement().accessibilityLabel("Goon mode is on. Say end goon mode to turn it off.")
+    }
+}
+
+/// A clock for drawing that runs fast only while something is moving, and otherwise ticks slowly.
+/// Asked afresh before every frame, so it speeds up and slows down by itself.
+struct BusySchedule: TimelineSchedule {
+    let busy: () -> Bool
+    var fast = 1.0 / 30, idle = 0.5
+    func entries(from start: Date, mode: TimelineScheduleMode) -> AnyIterator<Date> {
+        var t = start
+        return AnyIterator { t = max(t, Date()).addingTimeInterval(busy() && mode != .lowFrequency ? fast : idle); return t }
+    }
+}
+
 struct FlashFrame: View {
     @ObservedObject var link: Link
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1.0 / 30)) { _ in
+        TimelineView(BusySchedule(busy: { Link.clock() - link.flashAt < 0.7 }, idle: 0.25)) { _ in
             let age = Link.clock() - link.flashAt
             let strength = max(0, 1 - age / (link.flash == "beat" ? 0.18 : 0.55))
             let colour: Color = link.flash == "wrong" ? Color(red: 1, green: 0.25, blue: 0.2) : link.flash == "good" ? Hud.green : .white
@@ -1217,6 +1273,9 @@ final class CoreScene: SKScene {
         let dt = min(0.05, max(0.001, now - last))
         last = now
         let offline = link.state == "OFFLINE"
+        // Smooth while it talks or hears, and a calm 20 frames a second for the slow tide when nothing is going on.
+        let lively = link.speaking || VoiceControl.shared.level > 0.06 || now - (link.ripples.last?.at ?? 0) < 4
+        if let v = view, v.preferredFramesPerSecond != (lively ? 60 : 20) { v.preferredFramesPerSecond = lively ? 60 : 20 }
 
         // Where each band wants to be.
         var want = [Double](repeating: 0, count: 16)
@@ -1273,7 +1332,7 @@ struct Core: NSViewRepresentable {
     func makeNSView(context: Context) -> SKView {
         let view = SKView()
         view.allowsTransparency = true
-        view.preferredFramesPerSecond = 120
+        view.preferredFramesPerSecond = 60
         view.ignoresSiblingOrder = true
         let scene = CoreScene(size: CGSize(width: 500, height: 420))
         scene.scaleMode = .resizeFill
@@ -1348,7 +1407,8 @@ struct Keys: View {
     let active: Bool
     static let whites: [Int] = (21...108).filter { ![1, 3, 6, 8, 10].contains($0 % 12) }
     var body: some View {
-        TimelineView(.periodic(from: .now, by: active ? 1.0 / 30 : 1.0 / 2)) { _ in
+        // Full speed only while notes are sounding or their light is still rising.
+        TimelineView(BusySchedule(busy: { active && Link.clock() - max(link.ripples.last.map { max($0.at, $0.off ?? 0) } ?? 0, link.echoes.last.map { max($0.at, $0.off ?? 0) } ?? 0) < 6 || link.ripples.suffix(8).contains { $0.off == nil } }, idle: active ? 0.25 : 1)) { _ in
             Canvas { g, size in
                 let w = size.width / CGFloat(Keys.whites.count)
                 let rain: CGFloat = 64               // room above the keys for the rising light
@@ -1757,7 +1817,7 @@ struct Visualiser: NSViewRepresentable {
     let link: Link
     func makeNSView(context: Context) -> SKView {
         let view = SKView()
-        view.preferredFramesPerSecond = 120          // as fast as the screen allows
+        view.preferredFramesPerSecond = 60
         view.ignoresSiblingOrder = true
         let scene = RainScene(size: CGSize(width: 1240, height: 840))
         scene.scaleMode = .resizeFill
@@ -1887,6 +1947,7 @@ struct ContentView: View {
     var body: some View {
         ZStack(alignment: .top) {
             if link.welcome { WelcomeScreen(link: link) } else if link.settings { SettingsScreen(link: link) } else if link.visual { VisualiserScreen(link: link) } else { console }
+            if link.goon { GoonOverlay(link: link).transition(.opacity) }
             VStack { UpdateBanner(link: link); Spacer() }.animation(.easeOut(duration: 0.35), value: link.updateVersion)
         }
         .frame(minWidth: 1120, minHeight: 780)
@@ -2245,6 +2306,7 @@ struct WelcomeScreen: View {
     @State private var shown = 0
     @State private var listen = true
     @State private var natural = true
+    @State private var brain = true
     @FocusState private var typing: Bool
     // Offered in the order the Mac hears them best, after Nova itself. (Measured: see Profile.measured in the engine.)
     static let names = ["Nova", "Apollo", "Harmony", "Phoenix", "Luna", "Melody", "Aria"]
@@ -2333,7 +2395,7 @@ struct WelcomeScreen: View {
         if reader { about.append("uses a screen reader, so never rely on anything visual") }
         if plays { about.append("plays piano or makes music") }
         func clean(_ t: String) -> String { t.replacingOccurrences(of: "|", with: " ").replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces) }
-        link.send("~setup \(clean(name))|\(chosen)|\(clean(city))|\(fahrenheit ? "F" : "C")|\(about.joined(separator: "; "))|\(plays ? 1 : 0)|\(month > 0 ? String(format: "%02d-%02d", month, day) : "")|\(natural ? 1 : 0)\n")
+        link.send("~setup \(clean(name))|\(chosen)|\(clean(city))|\(fahrenheit ? "F" : "C")|\(about.joined(separator: "; "))|\(plays ? 1 : 0)|\(month > 0 ? String(format: "%02d-%02d", month, day) : "")|\(natural ? 1 : 0)|\(brain ? 1 : 0)\n")
         link.assistant = chosen
         link.user = clean(name)
         link.welcome = false
@@ -2427,8 +2489,11 @@ struct WelcomeScreen: View {
                     choice("YES, LISTEN FOR \(chosen.uppercased())", listen) { listen = true }
                     choice("NOT NOW", !listen) { listen = false }
                 }
-                toggle("Give me my natural voice", "A free, one time download of about 400 megabytes, fetched in the background. It runs on this Mac and sounds far more human.", $natural)
-                    .frame(maxWidth: 640)
+                VStack(spacing: 10) {
+                    toggle("Give me my natural voice", "A free, one time download of about 370 megabytes, fetched in the background. It runs on this Mac and sounds far more human.", $natural)
+                    toggle("Give me a brain of my own", "So I can answer anything and understand you however you put it. About one gigabyte, once. It runs on this Mac with no internet. Not needed if this Mac has Apple Intelligence.", $brain)
+                }
+                .frame(maxWidth: 640)
             }
         default: EmptyView()
         }
@@ -2547,6 +2612,8 @@ struct SettingsScreen: View {
     @State private var contrast = UserDefaults.standard.bool(forKey: "contrast")
     @State private var listen = VoiceControl.shared.on
     @State private var login = LoginItem.on
+    @State private var effects = ((try? String(contentsOfFile: baseDir + "/sound-effects.txt", encoding: .utf8)) ?? "").hasPrefix("1")
+    @State private var brain = FileManager.default.fileExists(atPath: baseDir + "/brain/qwen2.5-1.5b-instruct-q4_k_m.gguf") || FileManager.default.fileExists(atPath: baseDir + "/brain/qwen2.5-1.5b-instruct-q4_k_m.gguf.part")
     @FocusState private var first: Bool
     static let styles: [(key: String, title: String, sample: String)] = [
         ("classic", "CLASSIC", "\u{201C}At your service.\u{201D} Composed, quick, a dry wit."),
@@ -2564,7 +2631,7 @@ struct SettingsScreen: View {
         func clean(_ t: String) -> String { t.replacingOccurrences(of: "|", with: " ").replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces) }
         link.setAccess("large", large)
         link.setAccess("contrast", contrast)
-        link.send("~prefs \(clean(name))|\(chosen)|\(clean(city))|\(fahrenheit ? "F" : "C")|\(month > 0 ? String(format: "%02d-%02d", month, day) : "")|\(style)|\(plays ? 1 : 0)\n")
+        link.send("~prefs \(clean(name))|\(chosen)|\(clean(city))|\(fahrenheit ? "F" : "C")|\(month > 0 ? String(format: "%02d-%02d", month, day) : "")|\(style)|\(plays ? 1 : 0)|\(effects ? 1 : 0)|\(brain ? 1 : 0)\n")
         link.assistant = chosen
         link.user = clean(name)
         link.style = style
@@ -2676,6 +2743,8 @@ struct SettingsScreen: View {
                         tick("Larger captions", $large)
                         tick("High contrast", $contrast)
                         tick("I play piano or make music", $plays)
+                        tick("Little sound effects", $effects)
+                        tick("Built-in AI brain (1 GB, works offline)", $brain)
                     }
                     .frame(width: 470, alignment: .leading)
                 }
@@ -3073,6 +3142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         if CommandLine.arguments.contains("--update") { link.handle("update 1.2.0|Faster answers, and a new voice to choose.") }
         if CommandLine.arguments.contains("--settings") { link.settings = true }
+        if CommandLine.arguments.contains("--goon") { link.goon = true }
         if let i = CommandLine.arguments.firstIndex(of: "--welcome") { link.welcome = true; link.welcomeStepForSnapshot = Int(CommandLine.arguments[safe: i + 1] ?? "") ?? 0 }
         let view = NSHostingView(rootView: ContentView(link: link))
         view.frame = NSRect(x: 0, y: 0, width: 1240, height: 840)

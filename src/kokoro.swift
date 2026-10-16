@@ -34,7 +34,9 @@ final class Kokoro {
     private var player: AVAudioPlayer?
     var firstSoundAt = 0.0                 // when the last thing spoken began to sound, for measuring delay
 
-    static var installed: Bool {
+    static var installed: Bool { SherpaVoice.installed || python }
+    /// The older way, kept working for anyone who installed it: a Python helper.
+    static var python: Bool {
         let fm = FileManager.default
         return fm.fileExists(atPath: folder.appendingPathComponent("kokoro-v1.0.onnx").path) &&
             fm.isExecutableFile(atPath: folder.appendingPathComponent(".venv/bin/python").path)
@@ -47,6 +49,21 @@ final class Kokoro {
         }
         state = .starting
         tidy()
+        try? FileManager.default.createDirectory(at: Kokoro.folder.appendingPathComponent("cache"), withIntermediateDirectories: true)
+        // Made inside Nova: no helper to start, only the model to load (a second or two).
+        if SherpaVoice.installed {
+            DispatchQueue.global(qos: .userInitiated).async {
+                let ok = SherpaVoice.load(british: self.voice.hasPrefix("b"))
+                self.lock.lock()
+                self.voices = ok ? SherpaVoice.speakers : []
+                if ok, !self.voices.contains(self.voice) { self.voice = "bm_george" }
+                self.state = ok ? .ready : .failed
+                self.lock.unlock()
+                logLine(ok ? "natural voice ready (built in)" : "natural voice could not start (built in)")
+                if ok { self.warmPlayer() }
+            }
+            return
+        }
         let p = Process()
         p.executableURL = Kokoro.folder.appendingPathComponent(".venv/bin/python")
         p.arguments = ["-I", baseDir.appendingPathComponent("kokoro_server.py").path, Kokoro.folder.path]
@@ -158,6 +175,10 @@ final class Kokoro {
         if FileManager.default.fileExists(atPath: url.path) { return url }
         var waited = 0
         while state == .starting, waited < 100 { usleep(100_000); waited += 1 }      // just after launch, the voice is still loading
+        if SherpaVoice.installed {
+            guard state == .ready else { return nil }
+            return SherpaVoice.write(text, voice: voice, speed: Double(speed) ?? 1, to: url) ? url : nil
+        }
         lock.lock()
         guard state == .ready, let input = input else { lock.unlock(); return nil }
         counter += 1

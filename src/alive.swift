@@ -278,7 +278,7 @@ extension Engine {
             // The session that stays open answers in a second or two. A short word first only when it is slow.
             // If the answer takes more than a moment, a soft note says "I heard you, I'm thinking".
             var thinking = true
-            DispatchQueue.global().asyncAfter(deadline: .now() + 1.3) { if thinking, self.alive(g) { self.chime([79, 84], vel: 34, hold: 0.25) } }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 1.3) { if thinking, Engine.effects, self.alive(g) { self.chime([79, 84], vel: 34, hold: 0.25) } }
             var answer = ""
             if !Opt.fast {
                 // Looking something up on the web takes a few seconds. Rather than leave a silence, it says so.
@@ -303,7 +303,8 @@ extension Engine {
             if answer.hasPrefix("The AI is not signed in") {
                 // Say how to sign in once; after that, just admit the sentence was not understood.
                 answer = self.warnedNoAI ? pick(["Sorry, I didn't catch what you wanted there.", "I'm not sure what you meant. Say it another way?"])
-                    : "I didn't recognise that one. On this Mac I can only follow requests I know, because it has no built-in language model: that needs Apple Intelligence switched on, in System Settings. Say \(Me.name), what can you do, to hear what I understand."
+                    : BuiltInAI.installing ? "My brain is still downloading, \(BuiltInAI.progress.isEmpty ? "just starting" : BuiltInAI.progress). Until it's here I can only follow requests I know."
+                    : "I can't answer that yet, because my brain isn't installed. Say install your brain: it's a one time download of about a gigabyte, and then I can answer anything, with no internet needed."
                 self.warnedNoAI = true
             }
             // The AI may name one of the things the app can do. Then it is done, not talked about.

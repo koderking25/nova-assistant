@@ -1,8 +1,8 @@
 // The natural voice: an optional download.
 //
 // Nova speaks with the Mac's own voice out of the box. The natural voices (Kokoro, an open
-// speech model that runs on this Mac) need about 600 MB of files, so they are fetched only
-// when asked for: a small Python, the kokoro-onnx package, and the model itself. Everything
+// speech model that runs on this Mac) are about 370 MB, so they are fetched when the welcome's
+// switch is left on or when asked for: the sherpa-onnx speech library and the model. Everything
 // goes into Nova's own folder, and "remove the natural voice" takes it all away again.
 
 import Foundation
@@ -30,58 +30,12 @@ enum VoiceInstaller {
     }
 
     /// Fetches and sets up everything. Returns nil when it worked, or a sentence saying what went wrong.
-    static func install(progress: (String) -> Void) -> String? {
+    static func install(progress: @escaping (String) -> Void) -> String? {
         let fm = FileManager.default
-        let dir = Kokoro.folder
         let free = (try? URL(fileURLWithPath: NSHomeDirectory()).resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?.volumeAvailableCapacityForImportantUsage ?? 0
-        if free < 1_500_000_000 { return "There isn't enough free space. The natural voice needs about one and a half gigabytes while it installs." }
-        try? fm.createDirectory(at: dir.appendingPathComponent("bin"), withIntermediateDirectories: true)
-        placeHelper()
-        guard fm.fileExists(atPath: baseDir.appendingPathComponent("kokoro_server.py").path) else { return "A file that should be inside the app is missing. Downloading Nova again should fix it." }
-        func curl(_ url: String, to file: URL, minutes: Double) -> Bool {
-            let part = file.appendingPathExtension("part")
-            let r = runTool("/usr/bin/curl", ["-fsSL", "--retry", "3", "-C", "-", "-m", "\(Int(minutes * 60))", "-o", part.path, url], timeout: minutes * 60 + 30)
-            guard r.ok, fm.fileExists(atPath: part.path) else { return false }
-            try? fm.removeItem(at: file)
-            return (try? fm.moveItem(at: part, to: file)) != nil
-        }
-        // 1. A small tool that sets up Python without touching the system's own.
-        let uv = dir.appendingPathComponent("bin/uv")
-        if !fm.isExecutableFile(atPath: uv.path) {
-            progress("Step one of three: a small setup tool.")
-            let tar = dir.appendingPathComponent("uv.tar.gz")
-            guard curl(uvURL, to: tar, minutes: 5) else { return "I couldn't download the setup tool. Check the internet connection and ask me again." }
-            guard runTool("/usr/bin/tar", ["-xzf", tar.path, "-C", dir.appendingPathComponent("bin").path, "--strip-components", "1"], timeout: 60).ok, fm.isExecutableFile(atPath: uv.path) else { return "The setup tool wouldn't unpack." }
-            try? fm.removeItem(at: tar)
-        }
-        if cancelled { return "Cancelled." }
-        // 2. Python and the speech package, kept inside Nova's folder.
-        let python = dir.appendingPathComponent(".venv/bin/python")
-        let env = ["UV_PYTHON_INSTALL_DIR=\(dir.appendingPathComponent("python").path)", "UV_CACHE_DIR=\(dir.appendingPathComponent("uv-cache").path)"]
-        if !fm.isExecutableFile(atPath: python.path) {
-            progress("Step two of three: the speech engine. This takes a minute or two.")
-            let made = runTool("/usr/bin/env", env + [uv.path, "venv", "--python", "3.12", dir.appendingPathComponent(".venv").path], timeout: 600)
-            guard made.ok, fm.isExecutableFile(atPath: python.path) else { return "Python wouldn't set up: \(made.out.suffix(120))" }
-        }
-        let have = runTool(python.path, ["-I", "-c", "import kokoro_onnx, onnxruntime, numpy"], timeout: 60)
-        if !have.ok {
-            let got = runTool("/usr/bin/env", env + [uv.path, "pip", "install", "--python", python.path, "kokoro-onnx>=0.4,<1"], timeout: 1200)
-            guard got.ok else { return "The speech engine wouldn't install: \(got.out.suffix(120))" }
-        }
-        try? fm.removeItem(at: dir.appendingPathComponent("uv-cache"))
-        if cancelled { return "Cancelled." }
-        // 3. The voices themselves.
-        let voicesFile = dir.appendingPathComponent("voices-v1.0.bin"), modelFile = dir.appendingPathComponent("kokoro-v1.0.onnx")
-        if !fm.fileExists(atPath: voicesFile.path) {
-            guard curl(voices, to: voicesFile, minutes: 10) else { return "I couldn't download the voices. Ask me again and I'll carry on from where it stopped." }
-        }
-        if !fm.fileExists(atPath: modelFile.path) {
-            progress("Step three of three: the voice itself. It's 325 megabytes, so this is the long one.")
-            guard curl(model, to: modelFile, minutes: 45) else { return "The download stopped part way. Ask me again and I'll carry on from where it stopped." }
-        }
-        let size = ((try? fm.attributesOfItem(atPath: modelFile.path))?[.size] as? Int) ?? 0
-        guard size > 300_000_000 else { try? fm.removeItem(at: modelFile); return "The voice file came down incomplete. Ask me again to retry." }
-        return nil
+        if free < 1_000_000_000 { return "There isn't enough free space. The natural voice needs about one gigabyte free while it installs." }
+        // The voice is made inside Nova (sherpa-onnx): two checked downloads and nothing to set up.
+        return SherpaVoice.install(progress: progress, cancelled: { cancelled })
     }
 }
 
@@ -106,14 +60,14 @@ extension Engine {
                 self.run { g in self.say("The natural voice is removed. I'm back to the Mac's own voice after the next restart.", g) }
             }
             pendingUntil = now() + 20
-            reply("Remove the natural voice and free about 600 megabytes? Say yes or no."); return "voice remove?"
+            reply("Remove the natural voice and free about 400 megabytes? Say yes or no."); return "voice remove?"
         }
         if h.has("install", "download", "get", "add", "set up", "turn on", "i want", "give me", "use", "switch to", "can i have") {
             if Kokoro.installed { reply("The natural voice is already installed. Say next voice to hear the others, or audition the voices."); return "voice have" }
             if VoiceInstaller.running { reply("It's already downloading. I'll tell you the moment it's ready."); return "voice busy" }
             pendingConfirm = { [unowned self] in try? FileManager.default.removeItem(at: VoiceInstaller.declineFile); self.installVoice() }
             pendingUntil = now() + 25
-            reply("The natural voice is a free download of about 400 megabytes, and uses about 600 on your disk. It runs entirely on this Mac. Shall I get it? Say yes or no.")
+            reply("The natural voice is a free download of about 370 megabytes. It runs entirely on this Mac. Shall I get it? Say yes or no.")
             return "voice install?"
         }
         reply(Kokoro.installed ? "Yes, the natural voice is installed. I'm speaking as \(Kokoro.shared.enabled ? Kokoro.shared.name : "the Mac's own voice") now." : "Not yet. Say, install the natural voice, and I'll download it. It's free.")
@@ -123,11 +77,13 @@ extension Engine {
     /// Called when the welcome is finished, and at every start after that: if the natural voice
     /// is not there yet and the person has not chosen the Mac's voice, it is fetched in the background.
     func fetchVoiceIfWanted(announce: Bool) {
-        guard !Opt.fast, !Opt.textMode, !Kokoro.installed, !VoiceInstaller.running, !VoiceInstaller.declined else { return }
+        guard !Opt.fast, !Opt.textMode, !SherpaVoice.installed, !VoiceInstaller.running, !VoiceInstaller.declined else { return }
+        // Someone with the older, Python-run voice gets the built-in one quietly: same voices, quicker to start, nothing to break.
+        if Kokoro.python { installVoice(quiet: true, opening: nil, upgrade: true); return }
         installVoice(quiet: true, opening: announce ? "I'm fetching my natural voice in the background. It's a one time download, and I'll switch to it the moment it's ready." : nil)
     }
 
-    func installVoice(quiet: Bool = false, opening: String? = "Starting now. Carry on with whatever you like. I'll tell you when each step is done.") {
+    func installVoice(quiet: Bool = false, opening: String? = "Starting now. Carry on with whatever you like. I'll tell you when each step is done.", upgrade: Bool = false) {
         if Opt.fast { run { g in self.say("Installing.", g) }; return }
         VoiceInstaller.running = true
         VoiceInstaller.cancelled = false
@@ -141,11 +97,23 @@ extension Engine {
             }
             if VoiceInstaller.cancelled { VoiceInstaller.running = false; return }
             VoiceInstaller.running = false
+            ui("now ")
             while self.lastSpokenAt > now() { usleep(200_000) }
             if let p = problem {
                 self.noteMistake("the natural voice did not install", p)
                 // When it was fetching by itself, a failure is not announced: it simply tries again next time.
                 if !quiet { self.announce(p) }
+                return
+            }
+            if upgrade {
+                // The old helper's files go to the Trash, where they can still be got back. The new voice takes over at the next start.
+                if SherpaVoice.load(british: Kokoro.shared.voice.hasPrefix("b")) {
+                    for name in [".venv", "python", "bin", "kokoro-v1.0.onnx", "voices-v1.0.bin", "uv-cache"] {
+                        let u = Kokoro.folder.appendingPathComponent(name)
+                        if FileManager.default.fileExists(atPath: u.path) { try? FileManager.default.trashItem(at: u, resultingItemURL: nil) }
+                    }
+                    logLine("natural voice: moved to the built-in engine; the old Python files are in the Trash")
+                }
                 return
             }
             Kokoro.shared.start()

@@ -506,12 +506,14 @@ extension Engine {
             Profile.current.birthday = f.count > 6 && f[6].count == 5 ? f[6] : ""
             // The natural voice is the default. It is only left out if the welcome's switch was turned off.
             if f.count > 7, f[7] == "0" { try? "declined".write(to: VoiceInstaller.declineFile, atomically: true, encoding: .utf8) } else { try? FileManager.default.removeItem(at: VoiceInstaller.declineFile) }
+            // The built-in brain: fetched unless its switch was turned off.
+            if f.count > 8, f[8] == "0" { try? "declined".write(to: BuiltInAI.declineFile, atomically: true, encoding: .utf8) } else { try? FileManager.default.removeItem(at: BuiltInAI.declineFile) }
             Profile.current.done = true
             Profile.save()
             Weather.latest = nil; Weather.refresh()
             ui("name \(Me.name)|\(You.name)")
             sendVocabulary()
-            run { g in self.say("All set\(Profile.current.user.isEmpty ? "" : ", \(You.name)"). I'm \(Me.name). Call me by name, then say what you'd like. Ask me what I can do, any time.", g); self.fetchVoiceIfWanted(announce: true) }
+            run { g in self.say("All set\(Profile.current.user.isEmpty ? "" : ", \(You.name)"). I'm \(Me.name). Call me by name, then say what you'd like. Ask me what I can do, any time.", g); self.fetchVoiceIfWanted(announce: true); self.fetchBrainIfWanted(announce: true) }
             return
         }
         // The settings screen: everything at once, applied straight away, and only what changed is mentioned.
@@ -526,6 +528,16 @@ extension Engine {
             Profile.current.birthday = f[4].count == 5 ? f[4] : ""
             Profile.current.style = Style(rawValue: f[5])?.rawValue ?? before.style
             Profile.current.plays = f[6] == "1"
+            if f.count > 7 {
+                Engine.effects = f[7] == "1"
+                try? f[7].write(to: Engine.effectsFile, atomically: true, encoding: .utf8)
+            }
+            if f.count > 8 {
+                if f[8] == "1" {
+                    try? FileManager.default.removeItem(at: BuiltInAI.declineFile)
+                    if !BuiltInAI.installed, !BuiltInAI.installing { installBrain() }
+                } else if !BuiltInAI.installed { try? "declined".write(to: BuiltInAI.declineFile, atomically: true, encoding: .utf8) }
+            }
             Profile.current.done = true
             Profile.save()
             let now = Profile.current

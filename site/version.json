@@ -1,6 +1,6 @@
 {
-  "version": "1.3.1",
-  "notes": "I no longer mistake my own voice for you, even when I say my own name several times in one sentence.",
+  "version": "1.4.0",
+  "notes": "A brain of my own that works on any Mac with no internet, a natural voice that installs in one step and starts in a second, no more little sound effects, smoother animation, and goon mode.",
   "url": "https://saynova.app/payload.zip",
-  "sha256": "f7ffaa187e61793b5a0fb1e0b87ba5403420a4d3029a9e21f669684284b436d2"
+  "sha256": "ae4fe78fbf95d0ac8d1c5fc076cf1b1e6b95a0f12eb1eeef8a886d2cb9ce3c85"
 }

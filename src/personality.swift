@@ -47,6 +47,7 @@ extension Engine {
     /// What it says when its name is called and nothing else.
     func wakeOptions(hour: Int, first: Bool, again: Bool, longGap: Bool) -> [String] {
         let n = You.name, named = !Profile.current.user.isEmpty
+        if goonOn { return again ? ["Still locked in.", "Go."] : ["Goon mode. What's the move?", "Locked in. Talk to me.", "Ready. What are we doing?", "Hit me."] }
         if again {
             switch Style.current {
             case .classic: return ["Still here, \(n).", "Yes?", "Go ahead."]
@@ -156,6 +157,13 @@ extension Engine {
         if h.has("say something nice", "compliment me", "cheer me up", "motivate me", "encourage me", "i need motivation") {
             reply(pick(["You asked a machine for kindness, which tells me you're someone who gives it. Now go and do the thing.", "You're further along than you were yesterday, and you showed up again today. That's most of it.",
                         "Whatever you're working on, it's better for having you on it."])); return "nice"
+        }
+        if h.has("sound effects", "sound effect", "little sounds", "chimes", "beeps", "dings", "the bleeps", "the beeping") {
+            let on = h.has("on", "back", "enable", "bring back", "turn on", "want")  && !h.has("off", "no", "stop", "disable", "dont", "get rid")
+            Engine.effects = on
+            if !Opt.fast { try? (on ? "1" : "0").write(to: Engine.effectsFile, atomically: true, encoding: .utf8) }
+            ui("effects \(on ? 1 : 0)")
+            reply(on ? "Sound effects on." : "Sound effects off. Just my voice from now on, and alarms still ring."); return on ? "effects on" : "effects off"
         }
         // Things people always try.
         if h.has("pod bay doors") { reply("I'm afraid I can do that, \(You.name). I'm the helpful kind."); return "egg" }

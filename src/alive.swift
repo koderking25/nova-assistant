@@ -310,6 +310,18 @@ extension Engine {
             // The AI may name one of the things the app can do. Then it is done, not talked about.
             if let r = answer.range(of: "DO:") {
                 let wanted = answer[r.upperBound...].components(separatedBy: "\n")[0].trimmingCharacters(in: CharacterSet(charactersIn: " .\"'`*"))
+                // A guess that shares no real word with what was said is asked about, not done: overheard
+                // talk and misheard words must never turn into a random action.
+                if !wanted.isEmpty, !Engine.related(question, wanted), !Opt.fast {
+                    self.noteMistake("the AI guessed, so I asked", "\"\(question)\" as \"\(wanted)\"")
+                    self.lock.lock()
+                    self.pendingConfirm = { [unowned self] in _ = self.hear(wanted) }
+                    self.pendingUntil = now() + 15
+                    self.lock.unlock()
+                    self.say("Did you mean, \(wanted)?", g)
+                    self.ears.expectAnswer()
+                    return
+                }
                 self.lock.lock()
                 self.aiRouting = true
                 let done = wanted.isEmpty ? "ask" : self.hear(wanted)

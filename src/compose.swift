@@ -545,6 +545,7 @@ extension Engine {
             if now.assistant != before.assistant || now.style != before.style || now.user != before.user { AISession.shared.shutDown() }
             ui("name \(Me.name)|\(You.name)")
             ui("style \(now.style)")
+            if now.style != before.style || now.user != before.user { Kokoro.shared.prewarm(allWakeReplies) }
             sendVocabulary()
             var told: [String] = []
             // Its new name is said once, on purpose: this is the moment to hear how it sounds.

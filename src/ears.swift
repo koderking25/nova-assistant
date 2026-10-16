@@ -44,6 +44,7 @@ final class Ears {
     var openUntil = 0.0               // after "Jarvis" on its own, the next sentence is the request
     var awaiting = false
     var casualUntil = 0.0             // until when a short reply without the name is still listened to
+    var openByName = false            // the open window began with the name being called, not with a question of its own
 
     // Words the recogniser sometimes writes when "Jarvis" was said. They only count at the very
     // start of a sentence, and only when what follows is plainly a request, so ordinary talk
@@ -265,6 +266,7 @@ final class Ears {
         lock.lock(); defer { lock.unlock() }
         settleCredits(within: 3)
         awaiting = true
+        openByName = false
         openUntil = now() + 12
     }
 
@@ -379,6 +381,8 @@ final class Ears {
             if Ears.words(request ?? "").isEmpty, (2...9).contains(Ears.words(before).filter({ $0 != "hey" }).count) { request = before }
         } else if t < openUntil {
             request = fresh
+            // Called by name a moment ago: anything goes. Waiting for an answer to its own question: only plain requests and answers.
+            if !openByName { casual = true }
         } else if t < casualUntil, said.count <= 9 {
             request = fresh
             casual = true
@@ -423,6 +427,7 @@ final class Ears {
             guard mine2 == self.token else { self.lock.unlock(); return }
             let clean = found.trimmingCharacters(in: CharacterSet(charactersIn: " ,.!?"))
             self.awaiting = clean.isEmpty
+            self.openByName = clean.isEmpty
             self.openUntil = clean.isEmpty ? now() + 10 : 0
             self.handled = text
             self.nameAt = -1
@@ -559,7 +564,7 @@ func earsSelfTest(_ engine: Engine, _ check: (String, Bool, String) -> Void) {
     engine.lastSpoken = "Yes, sir?"; engine.lastSpokenAt = now() + 30
     let k1 = ears5.partial("Jarvis yes sir new", final: false, engine: engine)
     engine.lastSpokenAt = now() - 1
-    ears5.openUntil = now() + 8
+    ears5.openUntil = now() + 8; ears5.openByName = true
     let k2 = ears5.partial("Jarvis yes sir new composition", final: true, engine: engine)
     check("ears: a request begun while it is still answering the name is not lost", k1 == "busy" && k2 == "acted" && engine.mode == .compose, "\(k1) \(k2) \(engine.mode)")
     engine.goHomeQuietly()

@@ -139,7 +139,7 @@ extension Engine {
             secondPass = true
             let done = hear(raw)
             secondPass = false
-            if done != "ask" { learn(pending, means: h.text); return done }
+            if done != "ask" { learn(pending, means: h.text, trusted: true); return done }
         }
         // "Do this, and then that."
         if !secondPass, !sequencing, !casualHearing, !h.has("spotify", "youtube", "click menu"), let done = sequenceHear(raw) { return done }
@@ -287,7 +287,7 @@ extension Engine {
         if h.has("band style", "change the band", "different band", "another band") { toggleBandStyle(); return "band style" }
         if h.has("speak up", "voice louder", "talk louder", "louder", "turn it up", "volume up", "turn up the volume", "turn the volume up", "cant hear you", "too quiet") && !h.has("band") { stdinKey("."); return "voice up" }
         if h.has("voice quieter", "talk quieter", "speak quieter", "quieter", "too loud", "turn it down", "volume down", "turn down the volume", "turn the volume down") { stdinKey(","); return "voice down" }
-        if h.has("audition", "all the voices", "all your voices", "which voices", "what voices", "try the voices", "hear the voices", "voice options") {
+        if h.has("audition", "auditions", "all the voices", "all your voices", "which voices", "what voices", "try the voices", "hear the voices", "voice options") {
             // Each voice introduces itself, so one can be picked by ear.
             run { g in
                 guard !Opt.fast, Kokoro.shared.state == .ready else { self.say("The new voices are not loaded.", g); return }

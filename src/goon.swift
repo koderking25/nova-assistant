@@ -12,9 +12,10 @@ private var goonStyleBefore: String?
 
 extension Engine {
     func goonHear(_ h: Heard) -> String? {
-        let named = h.has("goon mode", "goon", "goons mode", "gun mode")
+        // The recogniser often writes "goon" as "lagoon" ("end goon mode" came out as "and lagoon").
+        let named = h.has("goon mode", "goon", "goons mode", "gun mode", "goons", "lagoon", "lagoon mode", "the goon", "gune")
         guard named, h.words.count <= 8 else { return nil }
-        let off = h.has("deactivate", "exit", "end", "stop", "turn off", "leave", "quit", "disable", "off", "cancel", "kill", "close", "no more")
+        let off = h.has("deactivate", "exit", "end", "stop", "turn off", "leave", "quit", "disable", "off", "cancel", "kill", "close", "no more") || (goonOn && h.starts("and"))
         if off { return goonMode(false) }
         if h.has("status", "are you in", "is goon mode") { run { g in self.say(goonOn ? "Goon mode is live." : "Goon mode is off. Say activate goon mode.", g) }; return "goon status" }
         return goonMode(true)
@@ -71,4 +72,33 @@ func goonSelfTest(_ engine: Engine, _ check: (String, Bool, String) -> Void) {
     check("goon mode: it switches on and off by voice, is playful while on, and puts the manner back",
           a == "goon on" && wasOn && playful && wake.contains { $0.lowercased().contains("goon") || $0.contains("move") } && b == "goon off" && !goonOn && c == "goon off already" && Profile.current.style == style && d != "goon on",
           "\(a) \(wasOn) \(playful) \(b) \(c) \(d) \(wake)")
+}
+
+/// Cases from a real session's log, where overheard talk or a misheard word turned into a random action.
+func realLogSelfTest(_ engine: Engine, _ check: (String, Bool, String) -> Void) {
+    let good = [("make me a sad song", "play me something sad"), ("audition the voices please", "audition the voices"), ("put on some smooth jazz", "play smooth jazz on youtube")]
+    let bad = [("do you wanna play emoji", "play me something sad"), ("if you want its not loading", "open the visualizer"), ("I auditions", "open the visualizer"), ("input a random", "new composition")]
+    let g = good.map { Engine.related($0.0, $0.1) }, b = bad.map { Engine.related($0.0, $0.1) }
+    check("guesses: the AI's reading is only acted on when it shares a real word with what was said", !g.contains(false) && !b.contains(true), "\(g) \(b)")
+    // After it asks something, talk in the room without its name is not handed to the AI.
+    engine.goHomeQuietly(); engine.lastSpoken = "Want another one?"; engine.lastSpokenAt = now() - 1
+    let ears = Ears()
+    ears.expectAnswer()
+    let overheard = ears.partial("do you wanna play emoji", final: true, engine: engine)
+    engine.goHomeQuietly(); engine.lastSpoken = ""; engine.lastSpokenAt = now() - 30
+    let named = Ears()
+    _ = named.partial("Jarvis", final: true, engine: engine)
+    usleep(300_000)
+    engine.lastSpoken = "Yes, sir?"; engine.lastSpokenAt = now() - 30
+    let after = named.partial("Jarvis new composition", final: true, engine: engine)
+    let composed = engine.mode == .compose
+    check("ears: after it asks a question, overheard talk is let go, while a request after its name still works", overheard == "ignored" && after == "acted" && composed, "\(overheard) \(after) \(composed)")
+    engine.goHomeQuietly()
+    // "End goon mode", as the recogniser wrote it.
+    _ = engine.goonMode(true)
+    engine.lastSpoken = ""; engine.lastSpokenAt = now() - 30
+    let off = engine.hear("and lagoon")
+    check("goon mode: \"and lagoon\" (how \"end goon mode\" was heard) ends it", off == "goon off" && !goonOn, off)
+    if goonOn { _ = engine.goonMode(false) }
+    engine.goHomeQuietly()
 }

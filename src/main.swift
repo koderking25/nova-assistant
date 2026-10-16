@@ -870,6 +870,7 @@ final class Engine {
     var aiRouting = false              // the AI has named a command and it is being carried out
     var talk: [String] = []            // the last few things said to and by the AI, so it can follow a conversation
     var learned: [String: String] = [:]   // ways of saying things that it has been taught
+    var trustedLearned: [String] = []      // of those, the ones the person taught it directly
     var lastRequest = ""                  // the last sentence addressed to it
     var correcting: String? = nil         // a sentence it was told it got wrong, waiting to be put right
     var secondPass = false             // a loosely worded sentence is being retried in plain words
@@ -1610,6 +1611,7 @@ func selfTest(_ engine: Engine, _ midi: MidiIO) -> Never {
     personalitySelfTest(engine) { check($0, $1, $2) }
     builtInAISelfTest(engine) { check($0, $1, $2) }
     goonSelfTest(engine) { check($0, $1, $2) }
+    realLogSelfTest(engine) { check($0, $1, $2) }
     ownVoiceReplayTest(engine) { check($0, $1, $2) }
     looseSelfTest(engine) { check($0, $1, $2) }
     learnSelfTest(engine) { check($0, $1, $2) }
@@ -2177,7 +2179,7 @@ if !Opt.textMode {
                   "Carrying on.", "Jam with me.", "Undone.", "Playing.", "Recording stopped.", "At the start.", "Now you.", "Over to you.", "Have a go.", "Okay.", "All quiet.",
                   "Back home.", "Home again.", "Composition. I'm listening.", "Composition. Play me something.", "Done.", "There you go.", "Pressed."]
     for name in Set(flatNames + sharpNames) { common += ["Higher. \(name).", "Lower. \(name).", "Next is \(name)."] }
-    Kokoro.shared.prewarm(Engine.hellos + Engine.wakeReplies + common + Engine.chatReplies)
+    Kokoro.shared.prewarm(Engine.hellos + engine.allWakeReplies + common + Engine.chatReplies)
     Kokoro.shared.makeSystemClips()
 }
 ui("voice " + (Kokoro.installed && Kokoro.shared.enabled ? Kokoro.shared.name + " (Kokoro)" : (engine.speaker.voice?.name ?? "default")))

@@ -80,6 +80,13 @@ extension Engine {
         }
     }
 
+    /// Every reply to its name in the current manner, so their sound can be made ahead of time and play at once.
+    var allWakeReplies: [String] {
+        var all: [String] = []
+        for hour in [3, 9, 14, 20] { for (f, a, l) in [(true, false, false), (false, true, false), (false, false, true), (false, false, false)] { all += wakeOptions(hour: hour, first: f, again: a, longGap: l) } }
+        return Array(Set(all + ["Yes? I'm following your piece.", "Yes? The lesson can wait."]))
+    }
+
     /// How long it has been running, in words: "forty minutes", "two hours".
     var upFor: String {
         let m = max(1, Int((now() - bootedAt) / 60))
@@ -105,6 +112,7 @@ extension Engine {
                 Profile.save()
                 AISession.shared.shutDown()
                 ui("style \(s.rawValue)")
+                Kokoro.shared.prewarm(allWakeReplies)
                 switch s {
                 case .classic: reply("Very good. Classic it is.")
                 case .warm: reply("Of course. I'll keep it warm.")

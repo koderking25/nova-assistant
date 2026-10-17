@@ -281,7 +281,8 @@ extension Engine {
             return "band how"
         }
         if h.has("band") && h.has("quieter", "down", "softer", "less") { stdinKey("["); return "band down" }
-        if h.has("classic band", "original band", "old band", "early band", "first band", "band from before", "band like before", "the band i liked", "band how it was", "band the way it was") { setBandStyle("classic"); return "band classic" }
+        if h.has("classic band", "original band", "old band", "early band", "first band", "band from before", "band like before", "the band i liked", "band how it was", "band the way it was") { setBandStyle("early"); return "band early" }
+        if h.has("new band", "best band", "normal band", "default band", "smooth band") && !h.has("play", "with") { setBandStyle("new"); return "band new" }
         if h.has("full band", "big band", "bigger band", "whole band", "orchestra band", "newer band") && !h.has("play", "back", "hear", "with") { setBandStyle("full"); return "band full" }
         if h.has("simple band", "small band", "smaller band") { setBandStyle("simple"); return "band simple" }
         if h.has("band style", "change the band", "different band", "another band") { toggleBandStyle(); return "band style" }

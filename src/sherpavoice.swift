@@ -79,7 +79,8 @@ enum SherpaVoice {
         config.model.kokoro.lang = UnsafePointer(strings[5])
         config.model.kokoro.length_scale = 1.0
         config.model.provider = UnsafePointer(strings[6])
-        config.model.num_threads = Int32(max(2, min(4, ProcessInfo.processInfo.activeProcessorCount / 2)))
+        // Two threads: quick enough to stay well ahead of speech, and leaves the rest of the Mac to the music.
+        config.model.num_threads = ProcessInfo.processInfo.environment["NOVA_OLDTIMING"] != nil ? Int32(max(2, min(4, ProcessInfo.processInfo.activeProcessorCount / 2))) : 2
         config.max_num_sentences = 1
         let started = now()
         tts = create(&config)

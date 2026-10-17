@@ -1,6 +1,6 @@
 {
-  "version": "1.4.1",
-  "notes": "I answer my name faster, I no longer act on talk that was not meant for me, and when I am not sure what you meant I ask instead of guessing.",
+  "version": "1.5.0",
+  "notes": "A new band, rebuilt from the original one: smooth and full, never dropping out mid phrase, and out of the way of your notes. I also hear my name when it gets split in two, and I cope with a piano that has been transposed.",
   "url": "https://saynova.app/payload.zip",
-  "sha256": "f32d9fd83d98cfaecdde521a62125d12a67ff4c5911fb3fc312e993a9454d2f1"
+  "sha256": "9cf7c7abfc49b8c3401beaaa12762647ca7b6f1f2c87e1c9304e9a7025de0329"
 }

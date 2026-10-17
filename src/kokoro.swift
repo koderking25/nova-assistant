@@ -139,7 +139,9 @@ final class Kokoro {
         return max(0.6, min(1.5, saved ?? 1))
     }()
     private var lastRetry = 0.0
-    private var speakingNow = 0            // sentences being spoken, so background preparation can stand aside
+    private var speakingNow = 0
+    static var musicNow = 0                // pieces of music playing: background preparation waits for them
+    static let musicLock = NSLock()            // sentences being spoken, so background preparation can stand aside
 
     /// True when Kokoro should be given the sentence. It does not wait: while the voice is still
     /// loading, anything already kept as sound plays at once and the rest follows when it is ready.
@@ -256,7 +258,7 @@ final class Kokoro {
             for phrase in phrases {
                 for piece in Kokoro.sentences(phrase) where piece.text.count <= 60 {
                     guard self.state == .ready, self.enabled else { return }
-                    while self.speakingNow > 0 { usleep(200_000) }       // never make a sentence being spoken wait behind this
+                    while self.speakingNow > 0 || Kokoro.musicNow > 0 { usleep(200_000) }       // never make speech or music wait behind this
                     _ = self.synth(piece.text)
                 }
             }

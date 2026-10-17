@@ -19,6 +19,8 @@ final class Ears {
     private var softUntil = 0.0       // until when a request counts as following a merely possible name
     private var lastChatter = 0.0     // when ordinary talk, not meant for it, was last heard
     private var credits: [Double] = []   // one for each time it has said its own name and may yet hear it back; each has a time it lapses
+    private var stretchStart = true      // the next text begins a new stretch of listening
+    private var splitTail = "", splitAt = -100.0, joining = false
     private var owners: [Bool] = []   // for each name in the recogniser's text so far: true if it was its own voice
     private var sessionOver = false   // the recogniser finished its text; the next one starts afresh
     private var nameIsReal = false    // a name not yet dealt with was said by a person, not by itself
@@ -272,9 +274,23 @@ final class Ears {
 
     /// One update of the running transcript. Returns what was decided, for the tests.
     @discardableResult
-    func partial(_ text: String, final: Bool, engine: Engine) -> String {
+    func partial(_ given: String, final: Bool, engine: Engine) -> String {
         lock.lock(); defer { lock.unlock() }
         let t = now()
+        // The recogniser sometimes ends one stretch of listening in the middle of the name and starts the
+        // next with the rest ("Ja", then "rvis"). The two halves are put back together.
+        var text = given
+        if stretchStart, t - splitAt < 4, !splitTail.isEmpty, let first = given.split(separator: " ").first {
+            let joined = (splitTail + first).lowercased().filter { $0.isLetter }
+            if !Ears.isName(splitTail.lowercased().filter { $0.isLetter }), Ears.isName(joined) { joining = true }
+        }
+        if joining, let first = given.split(separator: " ").first { text = Me.name + given.dropFirst(first.count) }
+        stretchStart = final
+        if final {
+            splitTail = given.split(separator: " ").last.map(String.init) ?? ""
+            splitAt = t
+            joining = false
+        }
         let speaking = engine.lastSpokenAt > t
         let quietFor = t - engine.lastSpokenAt
         lastText = text; lastEngine = engine
@@ -670,5 +686,20 @@ func ownVoiceReplayTest(_ engine: Engine, _ check: (String, Bool, String) -> Voi
     ears.lapseCreditsForTest()
     let person = ears.partial(heard[0].wrote + " Houston what's the weather", final: true, engine: engine)
     check("ears: its own recorded sentences with a custom name never wake it, and a person right after still does", bad.isEmpty && person == "acted", bad.prefix(3).joined(separator: " | ") + " person: " + person)
+    engine.goHomeQuietly()
+}
+
+func splitNameSelfTest(_ engine: Engine, _ check: (String, Bool, String) -> Void) {
+    // From a real log: "Ja" ended one stretch of listening and "rvis" began the next.
+    engine.goHomeQuietly(); engine.lastSpoken = ""; engine.lastSpokenAt = now() - 30
+    let ears = Ears()
+    let a = ears.partial("Ja", final: true, engine: engine)
+    let b = ears.partial("rvis", final: false, engine: engine)
+    usleep(300_000); engine.lastSpoken = "Yes?"; engine.lastSpokenAt = now() - 30
+    let c = ears.partial("rvis new composition", final: true, engine: engine)
+    let ok = engine.mode == .compose
+    engine.goHomeQuietly(); engine.lastSpokenAt = now() - 30
+    let d = Ears().partial("rvis new composition", final: true, engine: engine)
+    check("ears: the name split across two stretches of listening (Ja, then rvis) is still heard; \"rvis\" alone is not", ok && a != "acted" && b == "acted" && c == "acted" && d != "acted" && engine.mode != .compose, "\(a) \(b) \(c) \(ok) \(d)")
     engine.goHomeQuietly()
 }

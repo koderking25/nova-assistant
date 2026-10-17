@@ -36,6 +36,17 @@ var keyKeep = 21    // the very lowest key of an 88-key piano: keep what was jus
 var keyHome = 23    // the second lowest white key: leave any mode and go back to the start
 var commandKeys: Set<Int> = [keyHear, keyNotes, keyNext, keyBack, keyTalk, keyPause, keyCompose, keyHelp, keyKeep, keyHome]
 
+/// How many semitones the piano is transposed (its own transpose button). Every note is corrected by
+/// this before anything else sees it, so the buttons and lessons work either way.
+var keyShift = 0
+
+/// The top key as the piano sent it. No real keyboard ends on C sharp or B: such a top key means the
+/// piano is transposed by a semitone, up or down, from a C at the top.
+func learnTop(raw: Int) {
+    keyShift = raw % 12 == 1 ? 1 : raw % 12 == 11 ? -1 : 0
+    setTopKey(raw - keyShift)
+}
+
 func setTopKey(_ top: Int) {
     var whites: [Int] = []
     var n = top
@@ -924,7 +935,7 @@ final class Engine {
            !(mem.dropped ?? []).contains(songs[i].name) { songIdx = i }
         if let d = try? Data(contentsOf: progressURL), let p = try? JSONDecoder().decode([String: Int].self, from: d) { progress = p }
         if let t = try? String(contentsOf: topKeyURL, encoding: .utf8), let n = Int(t.trimmingCharacters(in: .whitespacesAndNewlines)) {
-            setTopKey(n)
+            learnTop(raw: n)
         } else {
             awaitingTop = true
         }
@@ -989,8 +1000,21 @@ final class Engine {
         ears.voiceFinished()
     }
 
+    /// Music is about to play: this thread is timed first, and the voice's background work waits.
+    func musicStarts() {
+        if ProcessInfo.processInfo.environment["NOVA_OLDTIMING"] != nil { return }
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)
+        Kokoro.musicLock.lock(); Kokoro.musicNow += 1; Kokoro.musicLock.unlock()
+    }
+    func musicEnds() {
+        if ProcessInfo.processInfo.environment["NOVA_OLDTIMING"] != nil { return }
+        Kokoro.musicLock.lock(); Kokoro.musicNow = max(0, Kokoro.musicNow - 1); Kokoro.musicLock.unlock()
+    }
+
     func play(_ events: [Ev], _ g: Int) {
         if Opt.fast { return }
+        musicStarts()
+        defer { musicEnds() }
         // When the band plays, the piano part is played here too, on the Mac's own piano, so the
         // two are mixed in one place and the piano is always clearly on top. (Sent to Logic, its
         // level depends on whatever track happens to be selected, and it can vanish under the band.)
@@ -1009,6 +1033,26 @@ final class Engine {
             let id = [e.bytes[0] & 0x0F, e.bytes[1]]
             if e.bytes[0] & 0xF0 == 0x90 { sounding.insert(id) } else { sounding.remove(id) }
         }
+    }
+
+    /// For the timing test: the same waiting as play(), for notes eight to a beat at 120, sending nothing. Milliseconds late, per note.
+    func timingTrial(seconds: Double) -> [Double] {
+        var lates: [Double] = []
+        let done = DispatchSemaphore(value: 0)
+        run { _ in
+            self.musicStarts()
+            defer { self.musicEnds() }
+            let start = now()
+            var t = 0.0
+            while t < seconds {
+                while now() - start < t { usleep(UInt32(max(200, min(5000, (t - (now() - start)) * 1e6)))) }
+                lates.append((now() - start - t) * 1000)
+                t += 0.0625
+            }
+            done.signal()
+        }
+        done.wait()
+        return lates
     }
 
     func demoEvents(_ u: Unit, speed: Double = 1) -> [Ev] {
@@ -1330,11 +1374,13 @@ final class Engine {
         lock.lock(); defer { lock.unlock() }
         if awaitingTop {
             awaitingTop = false
-            setTopKey(pitch)
-            if !Opt.fast { try? String(pitch).write(to: topKeyURL, atomically: true, encoding: .utf8) }
+            let raw = pitch + keyShift
+            learnTop(raw: raw)
+            if !Opt.fast { try? String(raw).write(to: topKeyURL, atomically: true, encoding: .utf8) }
             loadSentences()
-            let name = sharpNames[pitch % 12]
-            run { g in self.say("Got it. Your top key is \(name), octave \(pitch / 12 - 1). Press it again to start a lesson. The eighth white key down from it is help. It tells you what every button does.", g) }
+            let name = sharpNames[keyHear % 12]
+            let shifted = keyShift == 0 ? "" : " Your piano is transposed a semitone \(keyShift > 0 ? "up" : "down"), so I'll correct every note for it."
+            run { g in self.say("Got it. Your top key is \(name), octave \(keyHear / 12 - 1).\(shifted) The eighth white key down from it is help.", g) }
             return
         }
         if commandKeys.contains(pitch) { command(pitch); return }
@@ -1612,6 +1658,7 @@ func selfTest(_ engine: Engine, _ midi: MidiIO) -> Never {
     builtInAISelfTest(engine) { check($0, $1, $2) }
     goonSelfTest(engine) { check($0, $1, $2) }
     realLogSelfTest(engine) { check($0, $1, $2) }
+    splitNameSelfTest(engine) { check($0, $1, $2) }
     ownVoiceReplayTest(engine) { check($0, $1, $2) }
     looseSelfTest(engine) { check($0, $1, $2) }
     learnSelfTest(engine) { check($0, $1, $2) }
@@ -1959,7 +2006,7 @@ if args.contains("--library") {
 }
 // Checks run from the command line must never disturb the copy the player is using, and a check
 // given too few arguments must stop here, not carry on and start up as a second the assistant.
-let checkFlags = ["--brain-test", "--voice-test", "--selftest", "--route", "--chat", "--lookup", "--reband", "--speak", "--ask", "--library", "--daw-test", "--reaper-test", "--new-logic-project", "--mute", "--cold", "--reaper", "--sound-check", "--install-voice", "--install-brain", "--update-test", "--wake-score"]
+let checkFlags = ["--band-lab", "--timing-test", "--brain-test", "--voice-test", "--selftest", "--route", "--chat", "--lookup", "--reband", "--speak", "--ask", "--library", "--daw-test", "--reaper-test", "--new-logic-project", "--mute", "--cold", "--reaper", "--sound-check", "--install-voice", "--install-brain", "--update-test", "--wake-score"]
 let isCheck = args.contains { checkFlags.contains($0) }
 if !isCheck, instanceLock >= 0 { becomeOnlyCopy() }
 let midi = MidiIO()
@@ -2042,12 +2089,28 @@ if let i = args.firstIndex(of: "--route") {
     }
     exit(0)
 }
+if let i = args.firstIndex(of: "--band-lab"), i + 2 < args.count {
+    bandLab(out: URL(fileURLWithPath: args[i + 1]), files: args[(i + 2)...].map { URL(fileURLWithPath: $0) })
+    exit(0)
+}
+// "--timing-test": times a dense band part (sent nowhere, so silent) while the voice prepares phrases in the background.
+if args.contains("--timing-test") {
+    Kokoro.shared.start()
+    _ = Kokoro.shared.available()
+    let phrases = (0..<120).map { "Phrase number \($0), said to keep the voice busy for a while." }
+    Kokoro.shared.prewarm(phrases)
+    usleep(500_000)
+    let lates = engine.timingTrial(seconds: 10)
+    let sorted = lates.sorted()
+    print(String(format: "%d notes: median %.1f ms late, 95th %.1f ms, worst %.1f ms, over 20 ms: %d", sorted.count, sorted[sorted.count / 2], sorted[sorted.count * 95 / 100], sorted.last ?? 0, sorted.filter { $0 > 20 }.count))
+    exit(0)
+}
 if args.contains("--selftest") {
     DispatchQueue.global().async { selfTest(engine, midi) }
     dispatchMain()
 }
 if isCheck { print("That check was not given what it needs, so nothing was started."); exit(2) }
-midi.onNote = { pitch, vel in engine.noteEvent(pitch, vel) }
+midi.onNote = { pitch, vel in engine.rawNote(pitch, vel) }
 midi.onPedal = { engine.pedal($0) }
 
 // Leaving always silences the tool's notes first, including when the app is opened again.

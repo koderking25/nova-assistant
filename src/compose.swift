@@ -245,11 +245,38 @@ extension Engine {
         }
     }
 
-    // Every key press and release from the piano arrives here.
+    /// Straight from the piano, before the transpose correction.
+    func rawNote(_ raw: Int, _ vel: Int) {
+        if vel > 0 {
+            lock.lock()
+            let above = !awaitingTop && raw - keyShift > keyHear
+            let below = keyShift > 0 && keyKeep >= 21 && raw - keyShift < 21
+            lock.unlock()
+            if above {
+                // Higher than the top key. If that is the top key moved by a semitone, the piano's transpose
+                // was switched on: correct for it and carry on, with the press doing its usual job.
+                let shift = raw % 12 == 1 ? 1 : raw % 12 == 11 ? -1 : 0
+                if shift != 0, raw - shift == keyHear {
+                    lock.lock(); keyShift = shift; lock.unlock()
+                    if !Opt.fast { try? String(raw).write(to: topKeyURL, atomically: true, encoding: .utf8) }
+                    logLine("piano transposed by \(shift): corrected")
+                    run { g in self.say("Your piano is sending every note a semitone \(shift > 0 ? "higher" : "lower") than before, as if its transpose is on. I've adjusted, so the keys work as usual.", g) }
+                } else {
+                    lock.lock(); awaitingTop = true; lock.unlock()       // a bigger piano than before: learn its top key
+                }
+            } else if below {
+                // Lower than the bottom key of the piano: the transpose has been switched off again.
+                lock.lock(); keyShift = 0; lock.unlock()
+                if !Opt.fast { try? String(keyHear).write(to: topKeyURL, atomically: true, encoding: .utf8) }
+                logLine("piano transpose undone")
+            }
+        }
+        noteEvent(raw - keyShift, vel)
+    }
+
+    // Every key press and release from the piano arrives here, corrected for any transpose.
     func noteEvent(_ pitch: Int, _ vel: Int) {
         lock.lock(); defer { lock.unlock() }
-        // A key above the top key means the top key was set wrong, so learn it again.
-        if vel > 0, !awaitingTop, pitch > keyHear { awaitingTop = true }
         if pitch == keyHear, !awaitingTop, !paused, mode == .compose {
             // In composition mode the top key always means "play it back", at once,
             // however long it is held. It can never open the song menu from here.

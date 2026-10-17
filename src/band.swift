@@ -302,19 +302,22 @@ final class Sounds {
     }
 }
 
-// "Simple" keeps the band to bass, strings and cello (and drums when there is a beat).
-// "Full" adds the high strings, the horn and the warm pad. Remembered between sessions.
-// "Classic" is the band of the first days, and the one used unless another is chosen.
-let bandStyleURL = baseDir.appendingPathComponent("band-style-2.txt")
+// "New" (the default) is the band rebuilt on 16 October: see bandbest.swift.
+// "Early" is the band of 7 to 9 October, word for word, the one first called perfect.
+// "Full" adds the high strings, the horn and the warm pad. "Simple" keeps bass, strings and cello.
+// "Classic" is the later rewrite that followed the player's own note starts (it measured choppy).
+// Remembered between sessions; a new file, so everyone starts on the new band.
+let bandStyleURL = baseDir.appendingPathComponent("band-style-3.txt")
 var bandStyle: String = {
     let saved = ((try? String(contentsOf: bandStyleURL, encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-    return ["classic", "full", "simple"].contains(saved) ? saved : "classic"
+    return ["new", "early", "classic", "full", "simple"].contains(saved) ? saved : "new"
 }()
 var bandSimple: Bool { bandStyle == "simple" }
-var bandClassic: Bool { bandStyle == "classic" }
+/// The plainer, closer sound of the first band: used by the new band, the early band and the classic one.
+var bandClassic: Bool { ["new", "early", "classic"].contains(bandStyle) }
 
 extension Engine {
-    func toggleBandStyle() { setBandStyle(bandStyle == "classic" ? "full" : bandStyle == "full" ? "simple" : "classic") }
+    func toggleBandStyle() { setBandStyle(bandStyle == "new" ? "full" : bandStyle == "full" ? "early" : "new") }
 
     func setBandStyle(_ style: String) {
         bandStyle = style
@@ -323,7 +326,12 @@ extension Engine {
             midi.sounds?.revive("the band style changed", wait: true)        // the classic band has its own, plainer sound
         }
         ui("bandstyle \(style)")
-        run { g in self.say(style == "classic" ? "Classic band: bass, strings and cello, the way it first was." : style == "simple" ? "Simple band: bass, strings and cello, in the newer sound." : "Full band: with high strings, horn and pad.", g) }
+        let line = ["new": "The new band: bass, strings and cello, smooth and full, and out of the way of your notes.",
+                    "early": "The original band, exactly as it was in the first days.",
+                    "classic": "The classic band.",
+                    "simple": "Simple band: bass, strings and cello, in the hall sound.",
+                    "full": "Full band: with high strings, horn and pad."][style] ?? "Band changed."
+        run { g in self.say(line, g) }
     }
 }
 
@@ -459,7 +467,9 @@ func settle(_ band: [RNote], against piano: [RNote]) -> [RNote] {
 func bandParts(_ notes: [RNote], _ a: Analysis) -> [RNote] {
     // The classic band: written exactly as in the first days. The one later improvement kept is
     // the check that takes out a band note sitting a semitone from what the player is playing.
-    if bandClassic { return settle(classicBandParts(notes, a), against: notes) }
+    if bandStyle == "new" { return bandBest(notes, a) }
+    if bandStyle == "early" { return bandEarly(notes, a) }
+    if bandStyle == "classic" { return settle(classicBandParts(notes, a), against: notes) }
     guard !a.chords.isEmpty else { return [] }
     var out: [RNote] = []
     let scale = (a.minor ? [0, 2, 3, 5, 7, 8, 10] : [0, 2, 4, 5, 7, 9, 11]).map { ($0 + a.tonic) % 12 }

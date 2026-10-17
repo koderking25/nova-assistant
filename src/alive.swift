@@ -278,6 +278,8 @@ extension Engine {
             // The session that stays open answers in a second or two. A short word first only when it is slow.
             // If the answer takes more than a moment, a soft note says "I heard you, I'm thinking".
             var thinking = true
+            ui("think 1")
+            defer { ui("think 0") }
             DispatchQueue.global().asyncAfter(deadline: .now() + 1.3) { if thinking, Engine.effects, self.alive(g) { self.chime([79, 84], vel: 34, hold: 0.25) } }
             var answer = ""
             if !Opt.fast {

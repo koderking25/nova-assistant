@@ -9,7 +9,7 @@ let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size), pixelsH
 NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
 let g = NSGraphicsContext.current!.cgContext
 func green(_ a: Double, _ soft: Bool = false) -> CGColor {
-    soft ? CGColor(red: 0.55, green: 1, blue: 0.78, alpha: a) : CGColor(red: 0.22, green: 1, blue: 0.53, alpha: a)
+    soft ? CGColor(red: 0.62, green: 0.92, blue: 1.0, alpha: a) : CGColor(red: 0.30, green: 0.86, blue: 1.0, alpha: a)
 }
 let c = CGPoint(x: size / 2, y: size / 2)
 

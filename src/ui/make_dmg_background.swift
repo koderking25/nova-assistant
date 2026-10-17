@@ -8,7 +8,7 @@ let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(w * scale), pi
 rep.size = NSSize(width: w, height: h)
 NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
 let g = NSGraphicsContext.current!.cgContext
-let green = CGColor(red: 0.22, green: 1, blue: 0.53, alpha: 1)
+let green = CGColor(red: 0.30, green: 0.86, blue: 1.0, alpha: 1)
 
 g.setFillColor(CGColor(red: 0.008, green: 0.03, blue: 0.018, alpha: 1)); g.fill(CGRect(x: 0, y: 0, width: w, height: h))
 let glow = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: [CGColor(red: 0.04, green: 0.22, blue: 0.12, alpha: 1), CGColor(red: 0.008, green: 0.03, blue: 0.018, alpha: 1)] as CFArray, locations: [0, 1])!
@@ -36,5 +36,5 @@ func text(_ s: String, size: CGFloat, weight: NSFont.Weight, color: NSColor, y: 
 }
 text("DRAG NOVA INTO APPLICATIONS", size: 24, weight: .bold, color: .white, y: 340, tracking: 3)
 text("then open it from your Applications folder", size: 14, weight: .regular, color: NSColor(red: 0.55, green: 1, blue: 0.78, alpha: 1), y: 312)
-text("N O V A", size: 12, weight: .bold, color: NSColor(red: 0.22, green: 1, blue: 0.53, alpha: 0.7), y: 26, tracking: 4)
+text("N O V A", size: 12, weight: .bold, color: NSColor(red: 0.30, green: 0.86, blue: 1.0, alpha: 0.7), y: 26, tracking: 4)
 try! rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: CommandLine.arguments[1]))

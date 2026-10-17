@@ -47,6 +47,8 @@ final class Kokoro {
         if let saved = try? String(contentsOf: Kokoro.choiceFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), !saved.isEmpty {
             if saved == "mac" { enabled = false } else { voice = saved }
         }
+        // No choice made yet and the Jarvis voice is here: that is the voice.
+        if !FileManager.default.fileExists(atPath: Kokoro.choiceFile.path), JarvisVoice.installed { voice = JarvisVoice.id }
         if voice == JarvisVoice.id && !JarvisVoice.installed { voice = "bm_george" }
         state = .starting
         tidy()

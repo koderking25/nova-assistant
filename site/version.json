@@ -1,6 +1,6 @@
 {
-  "version": "1.6.0",
-  "notes": "A new Jarvis voice: natural, British and futuristic, with a hologram finish. Say install the Jarvis voice (Apple silicon Macs, about 600 MB).",
+  "version": "1.7.0",
+  "notes": "A new holographic look: a living arc-reactor core, a start-up sequence with sound, and a clean dock. The Jarvis voice is now built in.",
   "url": "https://saynova.app/payload.zip",
-  "sha256": "f86d1c65742039a79a067750c43d3d2286272d1131c541dd415d243e836f21f3"
+  "sha256": "438eb8d483c45b1e8615c1e4c14b40b3e81880ba36105297d03de71189abe8c1"
 }

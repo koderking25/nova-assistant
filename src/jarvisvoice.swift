@@ -13,9 +13,33 @@ import Foundation
 final class JarvisVoice {
     static let shared = JarvisVoice()
     static let id = "jarvis"
-    static let folder = baseDir.appendingPathComponent("jarvis-voice")
-    static var python: URL { folder.appendingPathComponent("env/bin/python") }
-    static var helper: URL { folder.appendingPathComponent("jarvis_voice_server.py") }
+    /// Where a downloaded copy goes. Newer apps carry the voice inside themselves instead (see `folder`).
+    static let downloaded = baseDir.appendingPathComponent("jarvis-voice")
+    /// Inside the app: Nova.app/Contents/Resources/jarvis-voice, with its own Python.
+    static var builtIn: URL? {
+        var places: [String] = []
+        if let r = ProcessInfo.processInfo.environment["NOVA_APP_RESOURCES"], !r.isEmpty { places.append(r) }
+        places.append("/Applications/Nova.app/Contents/Resources")
+        return places.map { URL(fileURLWithPath: $0).appendingPathComponent("jarvis-voice") }
+            .first { FileManager.default.isExecutableFile(atPath: $0.appendingPathComponent("python/bin/python3").path) }
+    }
+    static var folder: URL { complete(downloaded) ? downloaded : builtIn ?? downloaded }
+    static var python: URL {
+        let venv = folder.appendingPathComponent("env/bin/python")
+        return FileManager.default.isExecutableFile(atPath: venv.path) ? venv : folder.appendingPathComponent("python/bin/python3")
+    }
+    /// The helper script comes with the engine; a copy beside the voice is the fallback.
+    static var helper: URL {
+        let beside = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().deletingLastPathComponent().appendingPathComponent("jarvis_voice_server.py")
+        return FileManager.default.fileExists(atPath: beside.path) ? beside : downloaded.appendingPathComponent("jarvis_voice_server.py")
+    }
+    private static func complete(_ dir: URL) -> Bool {
+        let fm = FileManager.default
+        return (fm.isExecutableFile(atPath: dir.appendingPathComponent("env/bin/python").path) || fm.isExecutableFile(atPath: dir.appendingPathComponent("python/bin/python3").path))
+            && fm.fileExists(atPath: dir.appendingPathComponent("voice.wav").path)
+            && fm.fileExists(atPath: dir.appendingPathComponent("hf/hub/models--mlx-community--pocket-tts-8bit").path)
+            && fm.fileExists(atPath: dir.appendingPathComponent("hf/hub/models--kyutai--pocket-tts-without-voice-cloning").path)
+    }
     static var appleSilicon: Bool {
         var info = utsname(); uname(&info)
         let machine = withUnsafePointer(to: &info.machine) { $0.withMemoryRebound(to: CChar.self, capacity: 1) { String(cString: $0) } }
@@ -23,11 +47,7 @@ final class JarvisVoice {
         var arm: Int32 = 0; var size = MemoryLayout<Int32>.size
         return machine == "arm64" || (sysctlbyname("hw.optional.arm64", &arm, &size, nil, 0) == 0 && arm == 1)
     }
-    static var installed: Bool {
-        let fm = FileManager.default
-        return fm.isExecutableFile(atPath: python.path) && fm.fileExists(atPath: folder.appendingPathComponent("voice.wav").path)
-            && fm.fileExists(atPath: folder.appendingPathComponent("hf/hub/models--mlx-community--pocket-tts-8bit").path)
-    }
+    static var installed: Bool { appleSilicon && complete(folder) }
 
     enum State { case off, starting, ready, failed }
     private(set) var state = State.off
@@ -41,8 +61,9 @@ final class JarvisVoice {
     /// The helper travels inside the app; it is copied next to the voice whenever it has changed.
     static func placeHelper() {
         let beside = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().deletingLastPathComponent().appendingPathComponent("jarvis_voice_server.py")
-        guard FileManager.default.fileExists(atPath: folder.path), let code = FileManager.default.contents(atPath: beside.path) else { return }
-        if FileManager.default.contents(atPath: helper.path) != code { FileManager.default.createFile(atPath: helper.path, contents: code) }
+        let target = downloaded.appendingPathComponent("jarvis_voice_server.py")
+        guard FileManager.default.fileExists(atPath: downloaded.path), let code = FileManager.default.contents(atPath: beside.path) else { return }
+        if FileManager.default.contents(atPath: target.path) != code { FileManager.default.createFile(atPath: target.path, contents: code) }
     }
 
     func start() {
@@ -53,9 +74,10 @@ final class JarvisVoice {
         state = .starting
         let p = Process()
         p.executableURL = JarvisVoice.python
-        p.arguments = ["-I", JarvisVoice.helper.path, JarvisVoice.folder.path]
+        p.arguments = ["-I", "-B", JarvisVoice.helper.path, JarvisVoice.folder.path]
         var env = ProcessInfo.processInfo.environment
         env["HF_HOME"] = JarvisVoice.folder.appendingPathComponent("hf").path
+        env["PYTHONDONTWRITEBYTECODE"] = "1"              // the copy inside the app is never written to
         env["HF_HUB_OFFLINE"] = "1"                       // everything it needs is already here: never reach out
         env["HF_HUB_DISABLE_TELEMETRY"] = "1"
         env["TOKENIZERS_PARALLELISM"] = "false"
@@ -134,7 +156,7 @@ final class JarvisVoice {
         let fm = FileManager.default
         let free = (try? URL(fileURLWithPath: NSHomeDirectory()).resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?.volumeAvailableCapacityForImportantUsage ?? 0
         if free < 2_500_000_000 { return "There isn't enough free space. The Jarvis voice needs about two and a half gigabytes free while it installs, and keeps about 600 megabytes." }
-        let dir = folder
+        let dir = downloaded
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         var env = ProcessInfo.processInfo.environment
         env["UV_CACHE_DIR"] = dir.appendingPathComponent("uv-cache").path
@@ -163,15 +185,15 @@ final class JarvisVoice {
             try? fm.removeItem(at: tar)
         }
         progress("Step two of four: the speech engine. This is the big one.")
-        if !fm.isExecutableFile(atPath: python.path) {
+        if !fm.isExecutableFile(atPath: dir.appendingPathComponent("env/bin/python").path) {
             guard sh(uv.path, ["venv", "-q", "--python", "3.12", dir.appendingPathComponent("env").path], timeout: 900).ok else {
                 return "I couldn't set up the speech engine. Ask me again to carry on from where it stopped."
             }
         }
-        let pip = sh(uv.path, ["pip", "install", "-q", "--python", python.path, mlxAudio, "sentencepiece", "requests"], timeout: 1800)
+        let pip = sh(uv.path, ["pip", "install", "-q", "--python", dir.appendingPathComponent("env/bin/python").path, mlxAudio, "sentencepiece", "requests"], timeout: 1800)
         guard pip.ok else { return "The speech engine didn't finish downloading. Ask me again to carry on from where it stopped." }
         progress("Step three of four: the voice model.")
-        let model = sh(python.path, ["-I", "-c", "from huggingface_hub import snapshot_download; snapshot_download('mlx-community/pocket-tts-8bit')"], timeout: 1800)
+        let model = sh(dir.appendingPathComponent("env/bin/python").path, ["-I", "-B", "-c", "from mlx_audio.tts.utils import load_model; load_model('mlx-community/pocket-tts-8bit')"], timeout: 1800)
         guard model.ok else { return "The voice model didn't finish downloading. Ask me again to carry on from where it stopped." }
         progress("Step four of four: the voice itself.")
         let voice = dir.appendingPathComponent("voice.wav")
@@ -193,11 +215,12 @@ extension Engine {
               !h.has("louder", "quieter", "slower", "faster", "softer", "speak up") else { return nil }
         func reply(_ text: String) { run { g in self.say(text, g); self.resumeAfterHelp(g) } }
         if h.has("remove", "uninstall", "delete", "get rid of") {
-            guard FileManager.default.fileExists(atPath: JarvisVoice.folder.path) else { reply("The Jarvis voice isn't installed."); return "jarvis voice remove" }
+            if JarvisVoice.builtIn != nil && !FileManager.default.fileExists(atPath: JarvisVoice.downloaded.path) { reply("The Jarvis voice is built into the app, so there's nothing to remove. Say next voice to use another one."); return "jarvis voice built in" }
+            guard FileManager.default.fileExists(atPath: JarvisVoice.downloaded.path) else { reply("The Jarvis voice isn't installed."); return "jarvis voice remove" }
             pendingConfirm = { [unowned self] in
                 JarvisVoice.shared.shutDown()
                 if Kokoro.shared.voice == JarvisVoice.id { _ = Kokoro.shared.nextVoice() }
-                if !Opt.fast { try? FileManager.default.removeItem(at: JarvisVoice.folder) }
+                if !Opt.fast { try? FileManager.default.removeItem(at: JarvisVoice.downloaded) }
                 self.run { g in self.say("The Jarvis voice is removed, and its space is free again.", g) }
             }
             pendingUntil = now() + 20

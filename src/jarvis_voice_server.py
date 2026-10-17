@@ -26,7 +26,10 @@ try:
 
     # Keep the graphics memory this holds on to small: this Mac has little to spare.
     mx.set_cache_limit(64 * 1024 * 1024)
-    model = load_model("mlx-community/pocket-tts-8bit")
+    # From the folder itself (it may be inside the app, where nothing can be written), never the network.
+    import glob
+    snap = sorted(glob.glob(os.path.join(FOLDER, "hf/hub/models--mlx-community--pocket-tts-8bit/snapshots/*")))
+    model = load_model(snap[-1] if snap else "mlx-community/pocket-tts-8bit")
     SR = model.sample_rate
     with wave.open(os.path.join(FOLDER, "voice.wav")) as w:
         raw = np.frombuffer(w.readframes(w.getnframes()), np.int16).astype(np.float32) / 32768
@@ -129,7 +132,8 @@ def speak(text, path):
     return True
 
 
-speak("Ready.", os.path.join(FOLDER, "warm.wav"))     # the first sentence is slow; get it out of the way
+import tempfile
+speak("Ready.", os.path.join(tempfile.gettempdir(), "nova-jarvis-warm.wav"))     # the first sentence is slow; get it out of the way
 out("ready\tjarvis")
 for line in sys.stdin:
     parts = line.rstrip("\n").split("\t")

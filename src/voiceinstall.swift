@@ -77,7 +77,8 @@ extension Engine {
     /// Called when the welcome is finished, and at every start after that: if the natural voice
     /// is not there yet and the person has not chosen the Mac's voice, it is fetched in the background.
     func fetchVoiceIfWanted(announce: Bool) {
-        guard !Opt.fast, !Opt.textMode, !SherpaVoice.installed, !VoiceInstaller.running, !VoiceInstaller.declined else { return }
+        // With the Jarvis voice built in, the older voices are never fetched by themselves.
+        guard !Opt.fast, !Opt.textMode, !JarvisVoice.installed, !SherpaVoice.installed, !VoiceInstaller.running, !VoiceInstaller.declined else { return }
         // Someone with the older, Python-run voice gets the built-in one quietly: same voices, quicker to start, nothing to break.
         if Kokoro.python { installVoice(quiet: true, opening: nil, upgrade: true); return }
         installVoice(quiet: true, opening: announce ? "I'm fetching my natural voice in the background. It's a one time download, and I'll switch to it the moment it's ready." : nil)

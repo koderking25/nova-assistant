@@ -1,15 +1,15 @@
 #!/bin/zsh
 # Builds Nova for Apple silicon and Intel Macs (macOS 13 or later), and everything the website serves:
 #   dist/Nova.app       the app
-#   site/Nova.dmg       the download: a disk image with a drag-to-Applications window
+#   dist/Nova.dmg       the download: a disk image with a drag-to-Applications window
 #   site/payload.zip    what an installed Nova fetches to update itself
 #   site/version.json   what an installed Nova reads to learn there is an update
 #
 # To release an update: raise "version", say what is new in "notes", run ./build.sh, then deploy the site.
 set -e
 cd "$(dirname "$0")"
-version="1.6.0"
-notes="A new Jarvis voice: natural, British and futuristic, with a hologram finish. Say install the Jarvis voice (Apple silicon Macs, about 600 MB)."
+version="1.7.0"
+notes="A new holographic look: a living arc-reactor core, a start-up sequence with sound, and a clean dock. The Jarvis voice is now built in."
 
 work="$(mktemp -d)"
 app="dist/Nova.app"
@@ -29,15 +29,40 @@ echo "Building the window…"
 uisdk="$(xcrun --show-sdk-path)"
 [ -d /Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk ] && [ ! -d "$(xcode-select -p)/Platforms" ] && uisdk=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk
 for arch in arm64 x86_64; do
-  SDKROOT="$uisdk" swiftc -O -swift-version 5 -target $arch-apple-macos13.0 -parse-as-library -emit-library src/ui/NovaUI.swift -o "$work/ui-$arch.dylib" 2> "$work/ui-$arch.log" || { grep error -A4 "$work/ui-$arch.log" | head -20; exit 1; }
+  SDKROOT="$uisdk" swiftc -O -swift-version 5 -target $arch-apple-macos13.0 -parse-as-library -emit-library src/ui/NovaUI.swift src/ui/Holo.swift -o "$work/ui-$arch.dylib" 2> "$work/ui-$arch.log" || { grep error -A4 "$work/ui-$arch.log" | head -20; exit 1; }
 done
 lipo -create "$work/ui-arm64.dylib" "$work/ui-x86_64.dylib" -output "$payload/libNovaUI.dylib"
 
 echo "Building the starter…"
 clang -O2 -arch arm64 -arch x86_64 -mmacosx-version-min=13.0 src/ui/host.c -o "$app/Contents/MacOS/Nova"
 
-cp src/reaper/talking_piano_bridge.lua src/kokoro_server.py src/jarvis_voice_server.py "$payload/"
+cp src/reaper/talking_piano_bridge.lua src/kokoro_server.py src/jarvis_voice_server.py src/ui/boot-music.mp3 "$payload/"
 print -n "$version" > "$payload/version.txt"
+
+# The Jarvis voice, built into the app (Apple silicon): its own Python, the speech engine, the model
+# and the voice sample, about 600 MB. Made once into voice-bundle/ and copied in as instant clones, so
+# it costs almost no extra disk. NOVA_NO_VOICE=1 leaves it out.
+if [[ -z "$NOVA_NO_VOICE" ]]; then
+  vb="$PWD/voice-bundle"
+  if [[ ! -x "$vb/python/bin/python3" ]]; then
+    echo "Gathering the Jarvis voice…"
+    src="$HOME/Library/Application Support/Nova/jarvis-voice"
+    if [[ -x "$src/env/bin/python" && -d "$src/hf" && -f "$src/voice.wav" ]]; then
+      py=$(cd "$(dirname "$(readlink -f "$src/env/bin/python")")/.." && pwd)
+      mkdir -p "$vb"
+      cp -cR "$py" "$vb/python"
+      cp -cR "$src/env/lib/python3.12/site-packages/." "$vb/python/lib/python3.12/site-packages/"
+      cp -cR "$src/hf" "$vb/hf"
+      cp -c "$src/voice.wav" "$vb/voice.wav"
+      rm -rf "$vb/python/lib/python3.12/site-packages/pip"
+      find "$vb" -name "__pycache__" -type d -prune -exec rm -rf {} +
+      "$vb/python/bin/python3" -I -B -c "import mlx_audio, scipy" || { echo "The voice bundle doesn't run"; rm -rf "$vb"; exit 1; }
+    else
+      echo "  (no Jarvis voice on this Mac to bundle: say 'install the Jarvis voice' in Nova first; building without it)"
+    fi
+  fi
+  [[ -x "$vb/python/bin/python3" ]] && cp -cR "$vb" "$app/Contents/Resources/jarvis-voice"
+fi
 
 echo "Drawing the icon…"
 swiftc -O src/ui/make_icon.swift -o "$work/make_icon" 2>/dev/null
@@ -97,10 +122,11 @@ echo "Making the disk image…"
 swiftc -O src/ui/make_dmg_background.swift -o "$work/make_bg" 2>/dev/null
 stage="$work/stage"; mkdir -p "$stage/.background"
 "$work/make_bg" "$stage/.background/background.png"
-ditto "$app" "$stage/Nova.app"
+cp -cR "$app" "$stage/Nova.app"
 ln -s /Applications "$stage/Applications"
-rm -f "$work/rw.dmg" site/Nova.dmg site/Nova.zip
-hdiutil create -quiet -volname "Nova" -srcfolder "$stage" -fs HFS+ -format UDRW -size 60m "$work/rw.dmg"
+rm -f "$work/rw.dmg" dist/Nova.dmg site/Nova.zip
+size=$(( $(du -sm "$stage" | cut -f1) + 60 ))
+hdiutil create -quiet -volname "Nova" -srcfolder "$stage" -fs HFS+ -format UDRW -size ${size}m "$work/rw.dmg"
 mount=$(hdiutil attach -readwrite -noverify -noautoopen "$work/rw.dmg" | grep -o '/Volumes/.*' | head -1)
 osascript <<OSA >/dev/null 2>&1 || echo "  (the window layout could not be set; the image still works)"
 tell application "Finder"
@@ -124,13 +150,13 @@ tell application "Finder"
 end tell
 OSA
 sync; hdiutil detach -quiet "$mount" || hdiutil detach -quiet -force "$mount"
-hdiutil convert -quiet "$work/rw.dmg" -format UDZO -imagekey zlib-level=9 -o site/Nova.dmg
+hdiutil convert -quiet "$work/rw.dmg" -format UDZO -imagekey zlib-level=9 -o dist/Nova.dmg
 if [[ -n "$NOVA_SIGN" ]]; then
-  codesign --force --timestamp --sign "$NOVA_SIGN" site/Nova.dmg
+  codesign --force --timestamp --sign "$NOVA_SIGN" dist/Nova.dmg
   if [[ -n "$NOVA_NOTARY" ]]; then
     echo "Sending to Apple to be checked (this takes a few minutes)…"
-    xcrun notarytool submit site/Nova.dmg --keychain-profile "$NOVA_NOTARY" --wait
-    xcrun stapler staple site/Nova.dmg
+    xcrun notarytool submit dist/Nova.dmg --keychain-profile "$NOVA_NOTARY" --wait
+    xcrun stapler staple dist/Nova.dmg
   fi
 fi
 
@@ -147,4 +173,4 @@ cat > site/version.json <<JSON
 }
 JSON
 rm -rf "$work"
-echo "Built Nova $version: $app ($(du -sh "$app" | cut -f1)), site/Nova.dmg ($(du -sh site/Nova.dmg | cut -f1)), site/payload.zip ($(du -sh site/payload.zip | cut -f1))"
+echo "Built Nova $version: $app ($(du -sh "$app" | cut -f1)), dist/Nova.dmg ($(du -sh dist/Nova.dmg | cut -f1)), site/payload.zip ($(du -sh site/payload.zip | cut -f1))"

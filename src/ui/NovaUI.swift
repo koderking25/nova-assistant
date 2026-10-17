@@ -33,13 +33,14 @@ func savedProfile() -> [String: Any] {
 // MARK: - Colours
 
 enum Hud {
-    static let bg = Color(red: 0.008, green: 0.022, blue: 0.014)
-    static let panel = Color(red: 0.02, green: 0.07, blue: 0.045)
-    static let green = Color(red: 0.22, green: 1.0, blue: 0.53)
+    // Holographic cyan. ("green" is the accent's old name; every part of the window uses it.)
+    static let bg = Color(red: 0.004, green: 0.016, blue: 0.028)
+    static let panel = Color(red: 0.016, green: 0.06, blue: 0.09)
+    static let green = Color(red: 0.30, green: 0.86, blue: 1.0)
     static var contrast = UserDefaults.standard.bool(forKey: "contrast")   // near-white text for low vision
-    static var soft: Color { contrast ? Color(red: 0.96, green: 1.0, blue: 0.97) : Color(red: 0.55, green: 1.0, blue: 0.78) }
-    static var dim: Color { contrast ? Color(red: 0.72, green: 0.95, blue: 0.82) : Color(red: 0.24, green: 0.68, blue: 0.43) }
-    static let faint = Color(red: 0.06, green: 0.24, blue: 0.14)
+    static var soft: Color { contrast ? Color(red: 0.96, green: 0.99, blue: 1.0) : Color(red: 0.62, green: 0.90, blue: 1.0) }
+    static var dim: Color { contrast ? Color(red: 0.76, green: 0.88, blue: 0.95) : Color(red: 0.30, green: 0.55, blue: 0.68) }
+    static let faint = Color(red: 0.05, green: 0.17, blue: 0.24)
     static func mono(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
         .system(size: size, weight: weight, design: .monospaced)
     }
@@ -119,6 +120,8 @@ final class Link: ObservableObject {
     @Published var welcome = false         // the first-run questions are on screen
     @Published var settings = false        // the one-screen settings are on screen
     @Published var goon = false            // goon mode: neon frame and title over everything
+    @Published var thinking = false        // the AI is working on an answer
+    @Published var booted = CommandLine.arguments.contains("--snapshot") || CommandLine.arguments.contains("--caption-bench")
     @Published var pianoOn = !FileManager.default.fileExists(atPath: baseDir + "/piano-off.txt")
     @Published var dictating = false
     @Published var style = (savedProfile()["style"] as? String) ?? "classic"
@@ -288,6 +291,7 @@ final class Link: ObservableObject {
         env["TP_UI"] = "1"
         env["NOVA_HOME"] = baseDir
         env["NOVA_PAYLOAD"] = payload
+        env["NOVA_APP_RESOURCES"] = Bundle.main.resourcePath ?? ""       // where the built-in Jarvis voice lives
         env["TERM"] = "dumb"
         env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"
         p.environment = env
@@ -497,6 +501,9 @@ final class Link: ObservableObject {
         case "settings": settings = true; AppDelegate.shared?.showWindow()
         case "style": style = rest
         case "goon": goon = rest == "1"
+        case "think":
+            thinking = rest == "1"
+            if thinking { Sfx.shared.play(.tool) }
         case "piano": pianoOn = rest == "1"
         case "dictation": dictating = rest == "1"
         case "update":
@@ -1058,6 +1065,7 @@ final class VoiceControl: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
 
     /// Push to talk: start. Works whether or not Nova is listening for its name.
     func beginTalking(toggle: Bool) {
+        if !talking { Sfx.shared.play(.listen) }
         if talking { if toggle || pttToggle { endTalking() }; return }
         let go = {
             self.talking = true
@@ -1384,7 +1392,7 @@ final class CoreScene: SKScene {
         let side = min(size.width, size.height - scopeH - 6)
         let centre = CGPoint(x: size.width / 2, y: scopeH + 6 + (size.height - scopeH - 6) / 2)
         let R = side / 2 - 4
-        let green = NSColor(red: 0.22, green: 1.0, blue: 0.53, alpha: 1)
+        let green = NSColor(red: 0.30, green: 0.86, blue: 1.0, alpha: 1)
 
         // Outer ring and tick marks: drawn once.
         let ring = SKShapeNode(circleOfRadius: R)
@@ -1552,8 +1560,8 @@ struct Caption: View {
             let index = link.segmentIndex(at: cursor)
             let range = link.segments.indices.contains(index) ? link.segments[index] : NSRange(location: 0, length: 0)
             let piece = Array((link.caption as NSString).substring(with: range).utf16)
-            let dim: (Double, Double, Double) = Hud.contrast ? (0.55, 0.72, 0.62) : (0.16, 0.46, 0.30)
-            let soft: (Double, Double, Double) = Hud.contrast ? (0.93, 1.0, 0.95) : (0.55, 1.0, 0.78)
+            let dim: (Double, Double, Double) = Hud.contrast ? (0.58, 0.70, 0.78) : (0.16, 0.36, 0.48)
+            let soft: (Double, Double, Double) = Hud.contrast ? (0.93, 0.98, 1.0) : (0.62, 0.92, 1.0)
             let white: (Double, Double, Double) = (1, 1, 1)
             // Rebuilt only when the light has moved a fifth of a letter or more: the same look, a fraction of the work.
             let key = "\(index)|\(Int(cursor * 5))|\(Hud.contrast)"
@@ -1710,11 +1718,11 @@ final class RainScene: SKScene {
     private var falling: [(node: SKSpriteNode, glow: SKSpriteNode, at: Double)] = []
     private var nextRoll = 0                         // the next note of the file still to appear
     private let playing = SKLabelNode(fontNamed: "Menlo-Bold")
-    private let progress = SKSpriteNode(color: NSColor(red: 0.22, green: 1.0, blue: 0.53, alpha: 1), size: CGSize(width: 1, height: 3))
+    private let progress = SKSpriteNode(color: NSColor(red: 0.30, green: 0.86, blue: 1.0, alpha: 1), size: CGSize(width: 1, height: 3))
     private let chord = SKLabelNode(fontNamed: "Menlo-Bold")
     private let caption = SKLabelNode(fontNamed: "Menlo-Regular")
     private let notice = SKLabelNode(fontNamed: "Menlo-Bold")
-    private static let green = NSColor(red: 0.22, green: 1.0, blue: 0.53, alpha: 1)
+    private static let green = NSColor(red: 0.30, green: 0.86, blue: 1.0, alpha: 1)
     private static let soft = NSColor(red: 0.55, green: 1.0, blue: 0.78, alpha: 1)
     private static let teal = NSColor(red: 0.2, green: 0.7, blue: 0.68, alpha: 1)
     private static let dark = NSColor(red: 0.008, green: 0.022, blue: 0.014, alpha: 1)
@@ -2165,6 +2173,13 @@ struct ContentView: View {
     }
 
     var console: some View {
+        ZStack {
+            HoloConsole(link: link, active: active, groups: commandGroups)
+            if !link.booted { BootSequence(assistant: link.assistant) { withAnimation(.easeOut(duration: 0.5)) { link.booted = true } }.transition(.opacity) }
+        }
+    }
+
+    var oldConsole: some View {
         VStack(spacing: 14) {
             header
             HStack(alignment: .top, spacing: 14) {

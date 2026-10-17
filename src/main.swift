@@ -2249,7 +2249,7 @@ if !Opt.textMode {
     Kokoro.shared.prewarm(Engine.hellos + engine.allWakeReplies + common + Engine.chatReplies)
     Kokoro.shared.makeSystemClips()
 }
-ui("voice " + (Kokoro.installed && Kokoro.shared.enabled ? Kokoro.shared.name + " (Kokoro)" : (engine.speaker.voice?.name ?? "default")))
+ui("voice " + (Kokoro.installed && Kokoro.shared.enabled ? Kokoro.shared.name + (Kokoro.shared.voice == JarvisVoice.id ? "" : " (Kokoro)") : (engine.speaker.voice?.name ?? "default")))
 ui("buttons " + engine.buttonKeys.map(String.init).joined(separator: " ") + " \(keyHome) \(keyKeep)")
 ui("mode \(engine.mode)")
 ui("jazz " + jazzLessons.map { $0.title }.joined(separator: "|"))

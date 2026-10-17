@@ -108,7 +108,13 @@ extension Engine {
                 return "cancelled"
             }
         }
-        pendingConfirm = nil
+        // Just the name (to get its attention before answering) leaves the question open.
+        if !bare.isEmpty, !Ears.words(bare).allSatisfy({ ["jarvis", Me.key, "hey", "ok", "okay"].contains($0) }) { pendingConfirm = nil }
+        // A lone yes or no with no question waiting is not a request, and never goes to the AI.
+        if ["yes", "yeah", "yep", "no", "nope", "ok", "okay", "sure", "yes please", "no thanks"].contains(bare) {
+            run { g in self.say(pick(["There's nothing waiting for an answer just now.", "I haven't asked anything. What would you like?"]), g) }
+            return "lone answer"
+        }
         if let earlier = pendingSentence, now() < pendingUntil, !h.words.isEmpty, h.words.count <= 5 {
             // The reply to "which one?" completes the sentence that raised the question.
             pendingSentence = nil

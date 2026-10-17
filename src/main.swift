@@ -1661,6 +1661,7 @@ func selfTest(_ engine: Engine, _ midi: MidiIO) -> Never {
     realLogSelfTest(engine) { check($0, $1, $2) }
     splitNameSelfTest(engine) { check($0, $1, $2) }
     usefulSelfTest(engine) { check($0, $1, $2) }
+    didYouMeanSelfTest(engine) { check($0, $1, $2) }
     ownVoiceReplayTest(engine) { check($0, $1, $2) }
     looseSelfTest(engine) { check($0, $1, $2) }
     learnSelfTest(engine) { check($0, $1, $2) }

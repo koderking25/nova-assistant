@@ -146,3 +146,21 @@ func usefulSelfTest(_ engine: Engine, _ check: (String, Bool, String) -> Void) {
     engine.setPianoIgnored(saved, say: false)
     check("piano off: no key does anything until it is switched back on", ignored, "\(engine.mode)")
 }
+
+/// From a real session: "make me a pop song", then a "Did you mean, play me something epic?", then "Jarvis", "yes".
+func didYouMeanSelfTest(_ engine: Engine, _ check: (String, Bool, String) -> Void) {
+    engine.goHomeQuietly(); engine.lastSpoken = ""; engine.lastSpokenAt = now() - 30
+    let a = engine.loosely(Heard("make me a pop song")), b = engine.loosely(Heard("make me a sad song")), c = engine.loosely(Heard("play something chill"))
+    var ran = false
+    engine.pendingConfirm = { ran = true }
+    engine.pendingUntil = now() + 15
+    _ = engine.hear("\(Me.name)")                  // the name on its own first
+    let kept = engine.pendingConfirm != nil
+    let d = engine.hear("yes")
+    engine.pendingConfirm = nil
+    let e = engine.hear("yes")                     // and with nothing asked
+    check("asking: pop and chill are moods, the name alone keeps a question open, and a lone yes never goes to the AI",
+          a == "play me something happy" && b == "play me something sad" && c == "play me something calm" && kept && d == "confirmed" && ran && e == "lone answer",
+          "\(a ?? "nil") \(b ?? "nil") \(c ?? "nil") \(kept) \(d) \(ran) \(e)")
+    engine.goHomeQuietly()
+}

@@ -98,9 +98,9 @@ let looseRules: [Loose] = [
 // More words for each mood than the first pass knows.
 let moodWords: [String: [String]] = [
     "sad": ["gloomy", "dark", "depressing", "moody", "tearful", "sorrowful", "mournful", "miserable", "unhappy", "tragic", "grief", "wistful", "heartache", "moving", "somber", "sombre", "crying"],
-    "happy": ["cheery", "lively", "energetic", "playful", "bouncy", "jolly", "merry", "sunshine", "celebration", "party", "excited", "peppy", "smile"],
-    "calm": ["tranquil", "mellow", "serene", "bedtime", "lazy", "restful", "meditative", "spa", "unwind", "comforting", "cosy", "cozy", "rain"],
-    "epic": ["huge", "triumphant", "adventure", "war", "mighty", "bold", "grand", "massive", "hero", "thunder", "storm", "angry", "fierce", "victory"],
+    "happy": ["cheery", "lively", "energetic", "playful", "bouncy", "jolly", "merry", "sunshine", "celebration", "party", "excited", "peppy", "smile", "pop", "dance", "dancy", "catchy", "groovy", "funky", "summer", "summery", "bright", "fun"],
+    "calm": ["tranquil", "mellow", "serene", "bedtime", "lazy", "restful", "meditative", "spa", "unwind", "comforting", "cosy", "cozy", "rain", "chill", "lofi", "relaxing", "ambient", "study", "sleepy"],
+    "epic": ["huge", "triumphant", "adventure", "war", "mighty", "bold", "grand", "massive", "hero", "thunder", "storm", "angry", "fierce", "victory", "rock", "intense", "cinematic", "dramatic", "powerful", "movie", "film"],
     "dreamy": ["spooky", "ethereal", "mystical", "weird", "fantasy", "alien", "strange", "underwater", "ghostly", "enchanted", "fairy", "cloud", "moonlight", "stars", "eerie"],
     "hopeful": ["uplifting", "inspiring", "tender", "romantic", "love", "sweet", "touching", "heartfelt", "sunrise", "gentle", "soulful", "emotional", "longing", "memories", "sentimental"],
 ]
@@ -134,7 +134,8 @@ extension Engine {
     func loosely(_ h: Heard) -> String? {
         // A mood said some other way, with anything suggesting "play".
         if h.has("play", "something", "music", "piece", "tune", "song", "make", "give", "hear", "feeling", "feel", "mood", "im") {
-            for (mood, words) in moodWords where words.contains(where: { h.words.contains($0) }) {
+            for m in moods where (m.words + (moodWords[m.name] ?? [])).contains(where: { h.words.contains($0) }) {
+                let mood = m.name
                 if !h.has("teach", "learn", "lesson", "track", "metronome", "version", "it") { return "play me something \(mood)" }
             }
         }

@@ -313,13 +313,11 @@ extension Engine {
                 // A guess that shares no real word with what was said is asked about, not done: overheard
                 // talk and misheard words must never turn into a random action.
                 if !wanted.isEmpty, !Engine.related(question, wanted), !Opt.fast {
-                    self.noteMistake("the AI guessed, so I asked", "\"\(question)\" as \"\(wanted)\"")
-                    self.lock.lock()
-                    self.pendingConfirm = { [unowned self] in _ = self.hear(wanted) }
-                    self.pendingUntil = now() + 15
-                    self.lock.unlock()
-                    self.say("Did you mean, \(wanted)?", g)
-                    self.ears.expectAnswer()
+                    // A guess that shares no word with what was said is usually wrong ("pop song" is not "epic"),
+                    // and asking about it only gets in the way. Say so plainly instead, with the nearest thing that does exist.
+                    self.noteMistake("the AI guessed something unrelated, so I said I wasn't sure", "\"\(question)\" as \"\(wanted)\"")
+                    let near = self.closest(Heard(question))
+                    self.say(near.map { "I'm not sure I can do that. The closest I have is: \($0.ask)." } ?? pick(["I'm not sure how to do that one yet.", "I didn't quite follow that one. Could you put it another way?"]), g)
                     return
                 }
                 self.lock.lock()

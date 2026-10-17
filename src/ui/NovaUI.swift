@@ -1525,6 +1525,17 @@ struct Core: NSViewRepresentable {
 // soft leading edge and a bright tail that settles, and its position is eased from frame to
 // frame, so it glides instead of jumping from word to word. When a sentence ends, the next
 // one rises into its place; when the voice stops, the last one lingers and fades.
+/// The last few coloured captions, so a frame where the light has not moved reuses the one before.
+final class CaptionCache {
+    static let shared = CaptionCache()
+    private var store: [String: AttributedString] = [:], order: [String] = []
+    func get(_ k: String) -> AttributedString? { store[k] }
+    func put(_ k: String, _ v: AttributedString) {
+        store[k] = v; order.append(k)
+        if order.count > 8 { store[order.removeFirst()] = nil }
+    }
+}
+
 struct Caption: View {
     @ObservedObject var link: Link
     let active: Bool
@@ -1544,7 +1555,9 @@ struct Caption: View {
             let dim: (Double, Double, Double) = Hud.contrast ? (0.55, 0.72, 0.62) : (0.16, 0.46, 0.30)
             let soft: (Double, Double, Double) = Hud.contrast ? (0.93, 1.0, 0.95) : (0.55, 1.0, 0.78)
             let white: (Double, Double, Double) = (1, 1, 1)
-            let lit: AttributedString = {
+            // Rebuilt only when the light has moved a fifth of a letter or more: the same look, a fraction of the work.
+            let key = "\(index)|\(Int(cursor * 5))|\(Hud.contrast)"
+            let lit: AttributedString = CaptionCache.shared.get(key) ?? {
                 var out = AttributedString()
                 for (i, unit) in piece.enumerated() {
                     var ch = AttributedString(String(utf16CodeUnits: [unit], count: 1))
@@ -1553,18 +1566,22 @@ struct Caption: View {
                     else { ch.foregroundColor = mix(dim, white, 1 + behind / 2.2) }
                     out += ch
                 }
+                CaptionCache.shared.put(key, out)
                 return out
             }()
+            // The size is chosen once for the sentence's length, instead of measuring it again every frame.
+            let base: CGFloat = link.large ? 36 : 24
+            let size = piece.count > (link.large ? 90 : 120) ? base * 0.8 : base
             // Held for two seconds after the voice stops, then faded out.
             let fade = link.speaking ? 1.0 : max(0, min(1, 1 - (now - link.doneAt - 2.0) / 1.6))
             ZStack {
                 Text(lit)
-                    .font(.system(size: link.large ? 36 : 24, weight: .medium, design: .monospaced))
+                    .font(.system(size: size, weight: .medium, design: .monospaced))
                     .lineSpacing(6)
                     .lineLimit(link.large ? 4 : 3)
-                    .minimumScaleFactor(0.75)
                     .multilineTextAlignment(.center)
                     .shadow(color: Hud.green.opacity(link.speaking ? 0.55 : 0.2), radius: 9)
+                    .drawingGroup()
                     .id(index)
                     .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 10)), removal: .opacity.combined(with: .offset(y: -10))))
             }
@@ -2360,6 +2377,16 @@ final class QuietLift {
         if abs(gain - 1) < 0.01 { return }
         for c in 0..<chans { for i in 0..<n { ch[c][i] = max(-1, min(1, ch[c][i] * gain)) } }
     }
+}
+
+/// Where each word of a caption starts and how long it is, for the caption benchmark.
+func Kokoro_wordStarts(_ text: String) -> [(Int, Int)] {
+    var out: [(Int, Int)] = [], start: Int? = nil
+    for (i, ch) in text.utf16.enumerated() {
+        if ch == 32 { if let s0 = start { out.append((s0, i - s0)); start = nil } } else if start == nil { start = i }
+    }
+    if let s0 = start { out.append((s0, text.utf16.count - s0)) }
+    return out
 }
 
 enum WakeLab {
@@ -3239,6 +3266,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ note: Notification) {
         let args = CommandLine.arguments
+        if args.contains("--caption-bench") { return captionBench() }
         if let i = args.firstIndex(of: "--snapshot"), i + 1 < args.count { return snapshot(to: args[i + 1]) }
         if let i = args.firstIndex(of: "--wake-dir"), i + 2 < args.count { return WakeLab.runFolder(args[i + 1], out: args[i + 2], name: args[safe: i + 3] ?? "Nova") }
         if let i = args.firstIndex(of: "--listen-stream"), i + 2 < args.count { return WakeLab.runStream(args[i + 1], out: args[i + 2]) }
@@ -3306,6 +3334,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationWillTerminate(_ note: Notification) { Link.shared.stop() }
+
+    /// Times the caption: draws it 240 times off-screen while the light moves through a long sentence,
+    /// and prints the average and worst milliseconds per frame. Starts nothing.
+    func captionBench() {
+        let link = Link.shared
+        link.handle("say Good evening, Neil. It's seven degrees, grey and overcast in Brantford, with light rain later tonight, so take a coat if you go out.")
+        link.handle("word 0 4 300")
+        let view = NSHostingView(rootView: Caption(link: link, active: true).frame(width: 900, height: 200).background(Hud.bg))
+        view.frame = NSRect(x: 0, y: 0, width: 900, height: 200)
+        let w = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        w.contentView = view
+        w.orderFrontRegardless()
+        var times: [Double] = []
+        let words = Kokoro_wordStarts(link.caption)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            for f in 0..<240 {
+                if f % 8 == 0, f / 8 < words.count { link.handle("word \(words[f / 8].0) \(words[f / 8].1) 260") }
+                let t0 = CFAbsoluteTimeGetCurrent()
+                view.needsDisplay = true
+                view.layoutSubtreeIfNeeded()
+                if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) { view.cacheDisplay(in: view.bounds, to: rep) }
+                times.append((CFAbsoluteTimeGetCurrent() - t0) * 1000)
+                RunLoop.current.run(until: Date().addingTimeInterval(1.0 / 60))
+            }
+            let avg = times.reduce(0, +) / Double(times.count), worst = times.max() ?? 0
+            print(String(format: "caption: %.2f ms a frame on average, worst %.2f ms, %d frames over 16 ms", avg, worst, times.filter { $0 > 16 }.count))
+            exit(0)
+        }
+    }
 
     /// Draws the window with made-up activity into a picture, for checking the design. Starts nothing.
     func snapshot(to path: String) {

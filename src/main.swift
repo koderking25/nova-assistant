@@ -882,6 +882,7 @@ final class Engine {
     var talk: [String] = []            // the last few things said to and by the AI, so it can follow a conversation
     var learned: [String: String] = [:]   // ways of saying things that it has been taught
     var trustedLearned: [String] = []      // of those, the ones the person taught it directly
+    var dictating = false                  // every sentence heard is typed into the app in front
     var lastRequest = ""                  // the last sentence addressed to it
     var correcting: String? = nil         // a sentence it was told it got wrong, waiting to be put right
     var secondPass = false             // a loosely worded sentence is being retried in plain words
@@ -1659,6 +1660,7 @@ func selfTest(_ engine: Engine, _ midi: MidiIO) -> Never {
     goonSelfTest(engine) { check($0, $1, $2) }
     realLogSelfTest(engine) { check($0, $1, $2) }
     splitNameSelfTest(engine) { check($0, $1, $2) }
+    usefulSelfTest(engine) { check($0, $1, $2) }
     ownVoiceReplayTest(engine) { check($0, $1, $2) }
     looseSelfTest(engine) { check($0, $1, $2) }
     learnSelfTest(engine) { check($0, $1, $2) }

@@ -247,6 +247,7 @@ extension Engine {
 
     /// Straight from the piano, before the transpose correction.
     func rawNote(_ raw: Int, _ vel: Int) {
+        if pianoIgnored { return }
         if vel > 0 {
             lock.lock()
             let above = !awaitingTop && raw - keyShift > keyHear
@@ -508,9 +509,17 @@ extension Engine {
         // Every update of what the microphone is hearing: "ear 1 words" when the sentence is finished, "ear 0 words" while it is still going.
         if text.hasPrefix("ear ") {
             let rest = text.dropFirst(4)
+            // While dictating, finished sentences are typed, not treated as requests.
+            lock.lock(); let typing = dictating; lock.unlock()
+            if typing { if rest.hasPrefix("1") { DispatchQueue.global(qos: .userInitiated).async { _ = self.dictate(String(rest.dropFirst(2))) } }; return }
             ears.partial(String(rest.dropFirst(2)), final: rest.hasPrefix("1"), engine: self)
             return
         }
+        // Push to talk began: stop speaking at once and listen. Ended with nothing heard: say so, once.
+        if text == "ptt 1" { if lastSpokenAt > now() { interrupt() }; return }
+        if text == "ptt 0" { run { g in self.say(pick(["I didn't catch anything.", "Didn't hear that. Try again?"]), g) }; return }
+        // From the window: the piano switch.
+        if text == "piano 0" || text == "piano 1" { setPianoIgnored(text == "piano 0"); return }
         if text == "bg" { run { g in self.say(pick(["I'm still here, in the background. Just say my name.", "The window's closed, but I'm still listening. Just say \(Me.name)."]), g) }; return }
         if text.hasPrefix("login ") {
             let r = String(text.dropFirst(6))

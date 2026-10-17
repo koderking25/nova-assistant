@@ -15,6 +15,7 @@ import Speech
 import SpriteKit
 import SwiftUI
 import UniformTypeIdentifiers
+import Carbon.HIToolbox
 
 // Everything Nova remembers is kept in one folder in the user's Library.
 let baseDir: String = {
@@ -118,6 +119,8 @@ final class Link: ObservableObject {
     @Published var welcome = false         // the first-run questions are on screen
     @Published var settings = false        // the one-screen settings are on screen
     @Published var goon = false            // goon mode: neon frame and title over everything
+    @Published var pianoOn = !FileManager.default.fileExists(atPath: baseDir + "/piano-off.txt")
+    @Published var dictating = false
     @Published var style = (savedProfile()["style"] as? String) ?? "classic"
     var welcomeKey: ((NSEvent) -> Bool)?   // the welcome's own handling of arrow keys; true means "that was mine"
     var tabbing = false                    // Tab has been used: Space and Return then press the control the keyboard is on
@@ -494,6 +497,8 @@ final class Link: ObservableObject {
         case "settings": settings = true; AppDelegate.shared?.showWindow()
         case "style": style = rest
         case "goon": goon = rest == "1"
+        case "piano": pianoOn = rest == "1"
+        case "dictation": dictating = rest == "1"
         case "update":
             let parts = rest.components(separatedBy: "|")
             updateVersion = parts[0].trimmingCharacters(in: .whitespaces)
@@ -801,6 +806,20 @@ final class VoiceControl: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
     private var quietSince = 0.0      // when the assistant last stopped speaking
     private var buffers = 0, loudest = 0.0, lastReport = 0.0
     private var micName = ""
+    // The last two seconds of sound, so a new stretch of listening can start exactly where the last
+    // recognised word ended. Before, the half second around every restart was simply lost.
+    private var ring: [(t: Double, buf: AVAudioPCMBuffer)] = []
+    private let ringLock = NSLock()
+    private var requestStart = 0.0        // the moment (on the sound's own clock) the current request's audio begins
+    private var lastWordEnd = 0.0         // when the last recognised word ended
+    private var fedUntil = 0.0            // the newest sound given to the current request
+    // Push to talk: while held (or switched on), whatever is said goes straight to Nova, no name needed.
+    @Published var talking = false
+    private var pttText = ""
+    private var pttCarried = ""           // what earlier stretches of listening already wrote while talking
+    private var pttStarted = 0.0
+    private var pttHeldMic = false        // the microphone was opened just for this
+    var pttToggle = false                 // switched on with a tap: ends by itself after a pause
     static let wakeWords = ["hey jarvis", "jarvis", "jarvus", "jervis", "jarvas", "javis", "charvis", "jarvice", "jarvi", "jarves", "jarvis's", "travis", "garvis", "darvis", "service"]
     static let logURL = URL(fileURLWithPath: baseDir + "/voice-log.txt")
 
@@ -868,6 +887,9 @@ final class VoiceControl: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
         }
         let s = AVCaptureSession()
         let out = AVCaptureAudioDataOutput()
+        // Plain 32-bit samples, one channel: easy to keep and to replay into the recogniser.
+        out.audioSettings = [AVFormatIDKey: kAudioFormatLinearPCM, AVLinearPCMBitDepthKey: 32, AVLinearPCMIsFloatKey: true,
+                             AVLinearPCMIsNonInterleaved: true, AVNumberOfChannelsKey: 1, AVSampleRateKey: 16000]
         guard s.canAddInput(input), s.canAddOutput(out) else { status = "NO MICROPHONE"; log("could not attach \(mic.localizedName)"); return false }
         s.addInput(input)
         out.setSampleBufferDelegate(self, queue: queue)
@@ -881,7 +903,16 @@ final class VoiceControl: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
 
     // Sound arriving from the microphone: hand it to the recogniser and measure how loud it is.
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        request?.appendAudioSampleBuffer(sampleBuffer)
+        if let desc = CMSampleBufferGetFormatDescription(sampleBuffer), let fmt = Optional(AVAudioFormat(cmAudioFormatDescription: desc)),
+           fmt.commonFormat == .pcmFormatFloat32 {
+            let frames = AVAudioFrameCount(CMSampleBufferGetNumSamples(sampleBuffer))
+            if let pcm = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: frames) {
+                pcm.frameLength = frames
+                if CMSampleBufferCopyPCMDataIntoAudioBufferList(sampleBuffer, at: 0, frameCount: Int32(frames), into: pcm.mutableAudioBufferList) == noErr { feed(pcm) }
+            }
+        } else {
+            request?.appendAudioSampleBuffer(sampleBuffer)
+        }
         var peak = 0.0
         if let block = CMSampleBufferGetDataBuffer(sampleBuffer), let desc = CMSampleBufferGetFormatDescription(sampleBuffer),
            let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(desc)?.pointee {
@@ -915,11 +946,36 @@ final class VoiceControl: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
         }
     }
 
+    /// New sound: to the recogniser now, and into the two-second memory.
+    func feed(_ pcm: AVAudioPCMBuffer) {
+        let t = Link.clock()
+        ringLock.lock()
+        ring.append((t, pcm))
+        while let f = ring.first, t - f.t > 2.0 { ring.removeFirst() }
+        let req = request
+        ringLock.unlock()
+        if let r = req { r.append(pcm); fedUntil = t }
+    }
+
+    /// Gives a new request the sound since the last recognised word, so nothing said across a restart is lost
+    /// and nothing already dealt with is heard twice.
+    private func preroll(_ req: SFSpeechAudioBufferRecognitionRequest) {
+        let now = Link.clock()
+        if ProcessInfo.processInfo.environment["NOVA_OLDEARS"] != nil { requestStart = now; return }
+        let from = max(now - 1.6, lastWordEnd > 0 ? lastWordEnd + 0.05 : now - 1.0)
+        ringLock.lock()
+        let earlier = ring.filter { $0.t > from }
+        ringLock.unlock()
+        let dur = earlier.reduce(0.0) { $0 + Double($1.buf.frameLength) / $1.buf.format.sampleRate }
+        requestStart = now - dur
+        for b in earlier { req.append(b.buf) }
+    }
+
     private func listen() {
         settle?.invalidate(); settle = nil
         task?.cancel(); task = nil
         request?.endAudio()
-        guard on else { return }
+        guard on || talking else { return }
         guard let recognizer = recognizer, recognizer.isAvailable else { status = "RECOGNISER UNAVAILABLE"; log("the speech recogniser is not available"); return }
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
@@ -941,19 +997,25 @@ final class VoiceControl: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
         }
         // Names it should expect to hear: sent by the tool, so they include the songs in the library.
         req.contextualStrings = vocabulary.isEmpty ? ["\(Link.shared.assistant)", "Hey \(Link.shared.assistant)", "composition", "metronome", "REAPER", "Clair de Lune", "ear training", "jazz lesson"] : vocabulary
-        request = req
+        ringLock.lock(); request = req; ringLock.unlock()
+        preroll(req)
         consumed = 0
         status = "LISTENING FOR \u{201C}\(Link.shared.assistant.uppercased())\u{201D}"
         task = recognizer.recognitionTask(with: req) { [weak self] result, error in
             DispatchQueue.main.async {
                 guard let self = self, self.on, self.request === req else { return }
-                if let r = result { self.transcript(r.bestTranscription.formattedString, final: r.isFinal) }
+                if let r = result {
+                    if let last = r.bestTranscription.segments.last, last.duration > 0 { self.lastWordEnd = self.requestStart + last.timestamp + last.duration }
+                    self.transcript(r.bestTranscription.formattedString, final: r.isFinal)
+                }
                 if let e = error as NSError? {
                     // "No speech detected" simply means a quiet minute; anything else is worth writing down.
                     if !(e.domain == "kAFAssistantErrorDomain" && [1110, 203, 216, 301].contains(e.code)) { self.log("recogniser error \(e.domain) \(e.code): \(e.localizedDescription)") }
                 }
                 if error != nil || (result?.isFinal ?? false) {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { if self.on, self.request === req { self.listen() } }
+                    // Straight away: the sound in between is kept and handed over, so nothing is lost.
+                    if ProcessInfo.processInfo.environment["NOVA_OLDEARS"] != nil { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { if self.on, self.request === req { self.listen() } } }
+                    else if (self.on || self.talking), self.request === req { self.listen() }
                 }
             }
         }
@@ -978,9 +1040,80 @@ final class VoiceControl: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
         // decision about words that followed "\(Link.shared.assistant)" ever appears, as "Heard" in the panel.
         if text != lastWords { lastWords = text; lastHeardAt = Link.clock() }
         guard !link.typing else { return }
+        // Talking to Nova directly: the words are collected and sent when the talking ends.
+        if talking {
+            if !text.isEmpty { pttText = (pttCarried.isEmpty ? "" : pttCarried + " ") + text }
+            if final { pttCarried = pttText }
+            if pttToggle {
+                // Switched on with a tap: it ends by itself once the speaker has paused.
+                let seen = lastHeardAt
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { if self.talking, self.pttToggle, self.lastHeardAt == seen, !self.pttText.isEmpty { self.endTalking() } }
+            }
+            return
+        }
+        if let sink = testSink { sink(text, final); return }
         let safe = String(text.unicodeScalars.filter { $0.value >= 32 && $0.value != 126 }.map(Character.init)).suffix(600)
         link.send("~ear \(final ? 1 : 0) \(safe)\n")
     }
+
+    /// Push to talk: start. Works whether or not Nova is listening for its name.
+    func beginTalking(toggle: Bool) {
+        if talking { if toggle || pttToggle { endTalking() }; return }
+        let go = {
+            self.talking = true
+            self.pttToggle = toggle
+            self.pttText = ""; self.pttCarried = ""
+            self.pttStarted = Link.clock()
+            self.lastWordEnd = Link.clock() - 0.35          // the moment the key went down, and a breath before it
+            Link.shared.send("~ptt 1\n")                    // stop talking if it was, and listen
+            self.status = "TALKING TO \(Link.shared.assistant.uppercased())"
+            self.listen()
+            if NSWorkspace.shared.isVoiceOverEnabled, let w = NSApp.mainWindow ?? NSApp.windows.first {
+                NSAccessibility.post(element: w, notification: .announcementRequested, userInfo: [.announcement: "Listening", .priority: NSAccessibilityPriorityLevel.high.rawValue])
+            }
+            // Never left open by mistake.
+            let started = self.pttStarted
+            DispatchQueue.main.asyncAfter(deadline: .now() + 30) { if self.talking, self.pttStarted == started { self.endTalking() } }
+        }
+        if session?.isRunning == true || on { go(); return }
+        // The microphone was off: open it just for this.
+        SFSpeechRecognizer.requestAuthorization { auth in
+            DispatchQueue.main.async {
+                guard auth == .authorized else { self.status = "SPEECH NOT ALLOWED"; return }
+                AVCaptureDevice.requestAccess(for: .audio) { ok in
+                    DispatchQueue.main.async {
+                        guard ok, self.startMicrophone() else { self.status = "MICROPHONE NOT ALLOWED"; return }
+                        self.pttHeldMic = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { go() }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Push to talk: done. The last words are given a moment to arrive, then everything said goes to Nova.
+    func endTalking() {
+        guard talking else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+            guard self.talking else { return }
+            let said = self.pttText.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.talking = false
+            self.pttToggle = false
+            self.lastWordEnd = Link.clock()
+            if said.isEmpty { Link.shared.send("~ptt 0\n") }
+            else { Link.shared.send("~say " + String(said.unicodeScalars.filter { $0.value >= 32 && $0.value != 126 }.map(Character.init)) + "\n") }
+            if self.on { self.status = "LISTENING FOR \u{201C}\(Link.shared.assistant.uppercased())\u{201D}"; self.listen() }
+            else {
+                self.task?.cancel(); self.task = nil; self.request?.endAudio(); self.request = nil
+                if self.pttHeldMic { self.session?.stopRunning(); self.session = nil; self.pttHeldMic = false }
+                self.status = "OFF"
+            }
+        }
+    }
+
+    /// For the streaming test: listen with no microphone, to sound fed in by the test, and report what is heard.
+    var testSink: ((String, Bool) -> Void)?
+    func startForTest() { on = true; listen() }
 
     /// The tool has acted on a request: start a clean transcript for the next one.
     func startOver() { if on { listen() } }
@@ -1007,6 +1140,48 @@ struct VoiceButton: View {
     var body: some View {
         HudButton(title: voice.on ? "VOICE ON" : "VOICE OFF", hint: "Voice control. When it is on, say \(Link.shared.assistant), then what you want.") { voice.toggle() }
             .accessibilityLabel(voice.on ? "Voice control is on. Say \(Link.shared.assistant), then what you want." : "Voice control is off")
+    }
+}
+
+/// Push to talk, in the window: press once and speak; it sends when you pause, or press again.
+/// Anywhere on the Mac: hold Option and Space while speaking, or tap them to start and pause to finish.
+struct TalkButton: View {
+    @ObservedObject var voice = VoiceControl.shared
+    var body: some View {
+        HudButton(title: voice.talking ? "LISTENING\u{2026}" : "TALK \u{2325}SPACE", hint: "Talk to \(Link.shared.assistant) without saying the name. Press, speak, and pause. Option Space does the same from any app.") {
+            voice.beginTalking(toggle: true)
+        }
+        .accessibilityLabel(voice.talking ? "Listening. Press again to send." : "Talk to \(Link.shared.assistant). Press, then speak. Option Space works from any app.")
+    }
+}
+
+/// Option and Space, from any app: hold to talk, or tap to start and pause to finish. Uses the Mac's
+/// hot key service, which needs no special permission.
+final class TalkKey {
+    static let shared = TalkKey()
+    private var ref: EventHotKeyRef?
+    private var downAt = 0.0
+    func install() {
+        var spec = [EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+                    EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))]
+        InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
+            let kind = GetEventKind(event)
+            DispatchQueue.main.async { kind == UInt32(kEventHotKeyPressed) ? TalkKey.shared.pressed() : TalkKey.shared.released() }
+            return noErr
+        }, 2, &spec, nil, nil)
+        let id = EventHotKeyID(signature: OSType(0x4E6F7661), id: 1)        // "Nova"
+        RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey), id, GetApplicationEventTarget(), 0, &ref)
+    }
+    private func pressed() {
+        downAt = Link.clock()
+        let v = VoiceControl.shared
+        if v.talking { v.endTalking() } else { v.beginTalking(toggle: false) }
+    }
+    private func released() {
+        let v = VoiceControl.shared
+        guard v.talking else { return }
+        // A quick tap leaves it listening until a pause; a hold sends as soon as the keys come up.
+        if Link.clock() - downAt < 0.4 { v.pttToggle = true } else { v.endTalking() }
     }
 }
 
@@ -2016,8 +2191,10 @@ struct ContentView: View {
                 .accessibilityHidden(true)
             Spacer()
             VoiceButton()
-            HudButton(title: "PLAY A MIDI FILE  [ O ]", hint: "Choose a MIDI file and watch its notes fall onto the keys") { link.chooseFile() }
-            HudButton(title: "VISUALISER  [ F ]", hint: "Open the visualiser: your playing as rising light") { link.visual = true }
+            TalkButton()
+            HudButton(title: link.pianoOn ? "PIANO ON" : "PIANO OFF", hint: link.pianoOn ? "The piano's keys work. Press to make Nova ignore the piano." : "The piano is ignored. Press to listen to it again.") { link.send(link.pianoOn ? "~piano 0\n" : "~piano 1\n") }
+            HudButton(title: "MIDI FILE [O]", hint: "Choose a MIDI file and watch its notes fall onto the keys") { link.chooseFile() }
+            HudButton(title: "VISUALISER [F]", hint: "Open the visualiser: your playing as rising light") { link.visual = true }
             HStack(spacing: 7) {
                 Circle().fill(link.state == "ONLINE" ? Hud.green : Hud.dim).frame(width: 7, height: 7)
                     .shadow(color: Hud.green, radius: link.state == "ONLINE" ? 5 : 0)
@@ -2166,7 +2343,73 @@ enum WakeModel {
 /// A check that needs no microphone: the Mac's own voices say the name in a dozen ways, the
 /// recogniser transcribes the recordings, and what it wrote is saved, with and without the
 /// name having been taught. Run with:  open -n Nova.app --args --wake-test <file> [name]
+/// Quiet speech made louder before the recogniser hears it, the way a phone or smart speaker does.
+/// The gain rises slowly in quiet and falls fast on loud sound, never above 12 times, and only the
+/// level changes: nothing is added or removed.
+final class QuietLift {
+    private var gain: Float = 1
+    func apply(_ buf: AVAudioPCMBuffer) {
+        guard let ch = buf.floatChannelData else { return }
+        let n = Int(buf.frameLength), chans = Int(buf.format.channelCount)
+        guard n > 0 else { return }
+        var peak: Float = 0
+        for c in 0..<chans { for i in 0..<n { peak = max(peak, abs(ch[c][i])) } }
+        // Aim for speech peaks around a third of full scale. Silence (below 0.0015) is not lifted, so hiss stays hiss.
+        let want: Float = peak > 0.0015 ? min(12, 0.33 / peak) : gain
+        gain = want < gain ? want : gain + (want - gain) * 0.08
+        if abs(gain - 1) < 0.01 { return }
+        for c in 0..<chans { for i in 0..<n { ch[c][i] = max(-1, min(1, ch[c][i] * gain)) } }
+    }
+}
+
 enum WakeLab {
+    /// Plays one long recording into the listening code in real time, exactly as the microphone would, and
+    /// writes down every finished stretch of text. Each time the name is heard the listening restarts, as it
+    /// does when Nova acts on a request. Run with: open -n Nova.app --args --listen-stream <16 kHz mono wav> <out.txt>
+    static func runStream(_ path: String, out: String) {
+        var lines: [String] = []
+        func save() { try? lines.joined(separator: "\n").write(toFile: out, atomically: true, encoding: .utf8) }
+        guard let file = try? AVAudioFile(forReading: URL(fileURLWithPath: path), commonFormat: .pcmFormatFloat32, interleaved: false),
+              let all = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)), (try? file.read(into: all)) != nil else { lines.append("cannot read"); save(); exit(1) }
+        SFSpeechRecognizer.requestAuthorization { auth in
+            guard auth == .authorized else { lines.append("not allowed"); save(); exit(1) }
+            DispatchQueue.main.async {
+                let v = VoiceControl.shared
+                var last = "", changed = Date()
+                v.testSink = { text, final in
+                    if final { if !text.isEmpty { lines.append(text); save() }; last = "" } else if text != last { last = text; changed = Date() }
+                }
+                // As in the app: once the words stop changing for a moment, the sentence is acted on and the
+                // listening starts afresh for the next one.
+                Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+                    if !last.isEmpty, Date().timeIntervalSince(changed) > 0.8 { lines.append(last); save(); last = ""; v.startOver() }
+                }
+                WakeModel.prepare(name: "Jarvis") {
+                    v.startForTest()
+                    let rate = file.processingFormat.sampleRate, step = AVAudioFrameCount(rate * 0.02)
+                    var at: AVAudioFrameCount = 0
+                    let started = Date()
+                    Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { t in
+                        // Fed in real time: twenty milliseconds of sound every twenty milliseconds.
+                        let due = AVAudioFrameCount(Date().timeIntervalSince(started) * rate)
+                        while at < min(due, all.frameLength) {
+                            let len = min(step, all.frameLength - at)
+                            guard let piece = AVAudioPCMBuffer(pcmFormat: all.format, frameCapacity: len), let src = all.floatChannelData, let dst = piece.floatChannelData else { break }
+                            piece.frameLength = len
+                            for i in 0..<Int(len) { dst[0][i] = src[0][Int(at) + i] }
+                            v.feed(piece)
+                            at += len
+                        }
+                        if at >= all.frameLength {
+                            t.invalidate()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { if !last.isEmpty { lines.append(last) }; lines.append("done"); save(); exit(0) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Transcribes every recording of a prepared test set (see the evaluation scripts), feeding the sound
     /// in as the microphone does and with the name taught, and saves what the recogniser wrote for each.
     static func runFolder(_ dir: String, out: String, name: String) {
@@ -2184,6 +2427,24 @@ enum WakeLab {
                 let m = meta[i]; i += 1
                 let url = URL(fileURLWithPath: dir + "/" + ((m["file"] as? String) ?? ""))
                 guard let file = try? AVAudioFile(forReading: url), let buf = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)), (try? file.read(into: buf)) != nil else { one(); return }
+                // For testing distance: NOVA_LAB_GAIN makes the recording quieter, NOVA_LAB_LIFT lifts it again in 20 ms steps as live.
+                if let g = ProcessInfo.processInfo.environment["NOVA_LAB_GAIN"].flatMap(Float.init), let ch = buf.floatChannelData {
+                    for c in 0..<Int(buf.format.channelCount) { for i in 0..<Int(buf.frameLength) { ch[c][i] *= g } }
+                }
+                if ProcessInfo.processInfo.environment["NOVA_LAB_LIFT"] != nil {
+                    let lift = QuietLift(), step = AVAudioFrameCount(buf.format.sampleRate * 0.02)
+                    var at: AVAudioFrameCount = 0
+                    while at < buf.frameLength {
+                        let len = min(step, buf.frameLength - at)
+                        if let piece = AVAudioPCMBuffer(pcmFormat: buf.format, frameCapacity: len), let src = buf.floatChannelData, let dst = piece.floatChannelData {
+                            piece.frameLength = len
+                            for c in 0..<Int(buf.format.channelCount) { for i in 0..<Int(len) { dst[c][i] = src[c][Int(at) + i] } }
+                            lift.apply(piece)
+                            for c in 0..<Int(buf.format.channelCount) { for i in 0..<Int(len) { src[c][Int(at) + i] = dst[c][i] } }
+                        }
+                        at += len
+                    }
+                }
                 let req = SFSpeechAudioBufferRecognitionRequest()
                 req.shouldReportPartialResults = true
                 req.requiresOnDeviceRecognition = true
@@ -2913,6 +3174,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let listening = NSMenuItem(title: "Listen for \u{201C}\(Link.shared.assistant)\u{201D}", action: #selector(toggleVoice), keyEquivalent: "")
     private let login = NSMenuItem(title: "Start when I log in", action: #selector(toggleLogin), keyEquivalent: "")
     private let panel = NSMenuItem(title: "Show the panel when \(Link.shared.assistant) speaks", action: #selector(togglePanel), keyEquivalent: "")
+    private let piano = NSMenuItem(title: "Listen to the piano", action: #selector(togglePiano), keyEquivalent: "")
 
     func setUp() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -2925,7 +3187,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
         let tour = NSMenuItem(title: "Run the welcome again", action: #selector(welcomeAgain), keyEquivalent: "")
         let quit = NSMenuItem(title: "Quit Nova", action: #selector(quitApp), keyEquivalent: "")
         let natural = NSMenuItem(title: "Install the natural voice\u{2026}", action: #selector(naturalVoice), keyEquivalent: "")
-        for i in [open, again, natural, .separator(), listening, panel, login, .separator(), tour, quit] { i.target = self; menu.addItem(i) }
+        let talk = NSMenuItem(title: "Talk to \(Link.shared.assistant)  (\u{2325}Space)", action: #selector(talkNow), keyEquivalent: "")
+        for i in [open, talk, again, natural, .separator(), listening, piano, panel, login, .separator(), tour, quit] { i.target = self; menu.addItem(i) }
         item.menu = menu
         self.item = item
     }
@@ -2935,12 +3198,15 @@ final class MenuBar: NSObject, NSMenuDelegate {
         listening.state = VoiceControl.shared.on ? .on : .off
         login.state = LoginItem.on ? .on : .off
         panel.state = Overlay.enabled ? .on : .off
+        piano.state = Link.shared.pianoOn ? .on : .off
     }
     @objc func openWindow() { AppDelegate.shared?.showWindow() }
     @objc func naturalVoice() { Link.shared.send("~say install the natural voice\n") }
     @objc func openSettings() { Link.shared.welcome = false; Link.shared.settings = true; AppDelegate.shared?.showWindow() }
     @objc func welcomeAgain() { Link.shared.welcome = true; AppDelegate.shared?.showWindow() }
     @objc func toggleVoice() { VoiceControl.shared.toggle() }
+    @objc func talkNow() { VoiceControl.shared.beginTalking(toggle: true) }
+    @objc func togglePiano() { Link.shared.send(Link.shared.pianoOn ? "~piano 0\n" : "~piano 1\n") }
     @objc func toggleLogin() { _ = LoginItem.set(!LoginItem.on) }
     @objc func togglePanel() { UserDefaults.standard.set(!Overlay.enabled, forKey: "overlay") }
     @objc func quitApp() { NSApp.terminate(nil) }
@@ -2975,6 +3241,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let args = CommandLine.arguments
         if let i = args.firstIndex(of: "--snapshot"), i + 1 < args.count { return snapshot(to: args[i + 1]) }
         if let i = args.firstIndex(of: "--wake-dir"), i + 2 < args.count { return WakeLab.runFolder(args[i + 1], out: args[i + 2], name: args[safe: i + 3] ?? "Nova") }
+        if let i = args.firstIndex(of: "--listen-stream"), i + 2 < args.count { return WakeLab.runStream(args[i + 1], out: args[i + 2]) }
         if let i = args.firstIndex(of: "--wake-test"), i + 1 < args.count { return WakeLab.run(out: args[i + 1], name: args[safe: i + 2] ?? "Nova") }
 
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 840),
@@ -2997,6 +3264,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         Overlay.shared.setUp()
         MenuBar.shared.setUp()
+        TalkKey.shared.install()
 
         // The same single keys the Terminal window took. Command shortcuts stay with macOS.
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in

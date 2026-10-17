@@ -551,7 +551,7 @@ func homeSelfTest(_ engine: Engine, _ check: (String, Bool, String) -> Void) {
     let n6 = engine.hear("turn it up")
     let n7 = engine.hear("how do I play a C major chord")
     check("spotify: a song by an artist goes to Spotify without being told, and skip, what is this and turn it up mean Spotify only while it is playing",
-          n1 == "spotify play island in the sun by weezer" && n2 == "next" && n3 == "spotify next" && n4 == "spotify now" && n5 == "spotify volume up" && n6 == "voice up" && n7 != "lesson",
+          n1 == "spotify play island in the sun by weezer" && n2 == "next" && n3 == "spotify next" && n4 == "spotify now" && n5 == "spotify volume up" && n6 == "volume up" && n7 != "lesson",
           "\(n1) / \(n2) / \(n3) / \(n4) / \(n5) / \(n6) / \(n7)")
     engine.pretendSpotify = true
     let more = ["tell me about this song", "what key is this song in", "next", "start it over", "skip ahead thirty seconds", "shuffle on", "play more by this artist", "what album is this from", "how long is this song"].map { engine.hear($0) }

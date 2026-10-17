@@ -9,7 +9,7 @@
 set -e
 cd "$(dirname "$0")"
 version="1.5.0"
-notes="A new band, rebuilt from the original one: smooth and full, never dropping out mid phrase, and out of the way of your notes. I also hear my name when it gets split in two, and I cope with a piano that has been transposed."
+notes="I hear you far better: no more lost words when I restart listening. Push to talk with Option Space or the Talk button, a Piano Off switch, Mac volume, dark mode, screenshots, lock screen and dictation by voice, and a new band rebuilt from the original."
 
 work="$(mktemp -d)"
 app="dist/Nova.app"

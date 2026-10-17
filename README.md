@@ -7,6 +7,7 @@ built to be fully usable without looking at the screen.
 - **Download:** https://saynova.app (macOS 13 or later, Apple silicon and Intel).
 - **Website:** `site/index.html`.
 - **Licence:** MIT.
+- **Jarvis voice (optional download, Apple silicon):** [Pocket TTS](https://huggingface.co/kyutai/pocket-tts) by Kyutai, CC BY 4.0, run with [mlx-audio](https://github.com/Blaizzy/mlx-audio). The voice is speaker p226 of the [VCTK corpus](https://datashare.ed.ac.uk/handle/10283/3443) (Centre for Speech Technology Research, University of Edinburgh), CC BY 4.0, from Kyutai's [tts-voices](https://huggingface.co/kyutai/tts-voices). Nova adds its own "hologram" processing to it.
 
 ## What it does
 

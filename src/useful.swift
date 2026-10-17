@@ -158,6 +158,7 @@ func didYouMeanSelfTest(_ engine: Engine, _ check: (String, Bool, String) -> Voi
     let kept = engine.pendingConfirm != nil
     let d = engine.hear("yes")
     engine.pendingConfirm = nil
+    engine.lastSpoken = ""; engine.lastSpokenAt = now() - 30      // its own "Yes, sir?" is long finished
     let e = engine.hear("yes")                     // and with nothing asked
     check("asking: pop and chill are moods, the name alone keeps a question open, and a lone yes never goes to the AI",
           a == "play me something happy" && b == "play me something sad" && c == "play me something calm" && kept && d == "confirmed" && ran && e == "lone answer",

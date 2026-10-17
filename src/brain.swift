@@ -175,6 +175,7 @@ extension Engine {
         if let done = goonHear(h) { return done }
         if let done = usefulHear(h) { return done }
         if !h.text.isEmpty { lastDone = h.text }
+        if let done = jarvisVoiceHear(h) { return done }
         if let done = voiceInstallHear(h) { return done }
         if let done = extrasHear(h) { return done }
         if let done = homeHear(h) { return done }

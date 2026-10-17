@@ -13,7 +13,7 @@ final class Kokoro {
     static let choiceFile = baseDir.appendingPathComponent("voice-kokoro.txt")
     // A short list worth choosing from: British and American, male and female.
     static let favourites: [(id: String, name: String)] = [
-        ("bm_george", "George"), ("bm_fable", "Fable"), ("bm_lewis", "Lewis"), ("bm_daniel", "Daniel"),
+        (JarvisVoice.id, "Jarvis"), ("bm_george", "George"), ("bm_fable", "Fable"), ("bm_lewis", "Lewis"), ("bm_daniel", "Daniel"),
         ("am_michael", "Michael"), ("am_fenrir", "Fenrir"), ("bf_emma", "Emma"), ("af_heart", "Heart"), ("af_bella", "Bella"),
     ]
 
@@ -34,7 +34,7 @@ final class Kokoro {
     private var player: AVAudioPlayer?
     var firstSoundAt = 0.0                 // when the last thing spoken began to sound, for measuring delay
 
-    static var installed: Bool { SherpaVoice.installed || python }
+    static var installed: Bool { SherpaVoice.installed || python || JarvisVoice.installed }
     /// The older way, kept working for anyone who installed it: a Python helper.
     static var python: Bool {
         let fm = FileManager.default
@@ -47,15 +47,29 @@ final class Kokoro {
         if let saved = try? String(contentsOf: Kokoro.choiceFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), !saved.isEmpty {
             if saved == "mac" { enabled = false } else { voice = saved }
         }
+        if voice == JarvisVoice.id && !JarvisVoice.installed { voice = "bm_george" }
         state = .starting
         tidy()
         try? FileManager.default.createDirectory(at: Kokoro.folder.appendingPathComponent("cache"), withIntermediateDirectories: true)
+        // The Jarvis voice: a helper keeps it loaded. The built-in voices stay available, loaded only if chosen.
+        if voice == JarvisVoice.id {
+            DispatchQueue.global(qos: .userInitiated).async {
+                let ok = JarvisVoice.shared.waitReady(30)
+                self.lock.lock()
+                self.voices = [JarvisVoice.id] + (SherpaVoice.installed ? SherpaVoice.speakers : [])
+                self.state = ok ? .ready : .failed
+                self.lock.unlock()
+                logLine(ok ? "Jarvis voice ready" : "Jarvis voice could not start")
+                if ok { self.warmPlayer() }
+            }
+            return
+        }
         // Made inside Nova: no helper to start, only the model to load (a second or two).
         if SherpaVoice.installed {
             DispatchQueue.global(qos: .userInitiated).async {
                 let ok = SherpaVoice.load(british: self.voice.hasPrefix("b"))
                 self.lock.lock()
-                self.voices = ok ? SherpaVoice.speakers : []
+                self.voices = ok ? SherpaVoice.speakers + (JarvisVoice.installed ? [JarvisVoice.id] : []) : []
                 if ok, !self.voices.contains(self.voice) { self.voice = "bm_george" }
                 self.state = ok ? .ready : .failed
                 self.lock.unlock()
@@ -107,7 +121,14 @@ final class Kokoro {
         if let size = (try? fm.attributesOfItem(atPath: log))?[.size] as? Int, size > 300_000 { try? "".write(toFile: log, atomically: true, encoding: .utf8) }
     }
 
-    func shutDown() { try? input?.close(); process?.terminate() }
+    func shutDown() { try? input?.close(); process?.terminate(); JarvisVoice.shared.shutDown() }
+
+    /// After the Jarvis voice is installed: offer it alongside the others.
+    func refreshVoices() {
+        lock.lock(); defer { lock.unlock() }
+        if JarvisVoice.installed, !voices.contains(JarvisVoice.id) { voices.append(JarvisVoice.id) }
+        if state != .ready, JarvisVoice.installed { state = .ready }
+    }
 
     private func feed(_ data: Data) {
         lock.lock(); defer { lock.unlock() }
@@ -170,13 +191,14 @@ final class Kokoro {
         let speed = String(format: "%.2f", (text.count <= 16 ? 0.98 : 1.06) * Kokoro.rate)
         let text = Kokoro.spoken(text)
         var hash: UInt64 = 1469598103934665603
-        for b in ("v3" + voice + speed + text).utf8 { hash = (hash ^ UInt64(b)) &* 1099511628211 }
+        for b in ("v3" + voice + (voice == JarvisVoice.id ? "h1" : speed) + text).utf8 { hash = (hash ^ UInt64(b)) &* 1099511628211 }
         let keep = text.count <= 60
         let url = keep ? Kokoro.folder.appendingPathComponent("cache/\(String(hash, radix: 16)).wav")
                        : URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tp-kokoro-\(getpid())-\(String(hash, radix: 16)).wav")
         if FileManager.default.fileExists(atPath: url.path) { return url }
         var waited = 0
         while state == .starting, waited < 100 { usleep(100_000); waited += 1 }      // just after launch, the voice is still loading
+        if voice == JarvisVoice.id { return JarvisVoice.shared.write(text, to: url) ? url : nil }
         if SherpaVoice.installed {
             guard state == .ready else { return nil }
             return SherpaVoice.write(text, voice: voice, speed: Double(speed) ?? 1, to: url) ? url : nil
@@ -414,7 +436,8 @@ final class Kokoro {
 
     private func startEngine(rate: Double) -> Bool {
         if engineReady, engineFormat?.sampleRate == rate, engine.isRunning { return true }
-        guard let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1) else { return false }
+        // Two channels: the Jarvis voice is in stereo; one-channel voices are sent to both sides.
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2) else { return false }
         if !engineReady {
             engine.attach(node)
             observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { [weak self] _ in
@@ -438,16 +461,21 @@ final class Kokoro {
         return Double(t.sampleTime) / t.sampleRate
     }
 
-    /// Plays a finished recording (16-bit, one channel) at once. Returns its length, or nil if this route cannot be used.
+    /// Plays a finished recording (16-bit, one or two channels) at once. Returns its length, or nil if this route cannot be used.
     private func playNow(_ data: Data) -> Double? {
         let rate = Double(data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 24, as: UInt32.self) })
-        let count = (data.count - 44) / 2
+        let channels = max(1, Int(data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 22, as: UInt16.self) }))
+        let count = (data.count - 44) / (2 * channels)
         lock.lock(); defer { lock.unlock() }
         guard rate > 0, count > 0, startEngine(rate: rate), let format = engineFormat,
               let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(count)), let out = buffer.floatChannelData else { return nil }
         buffer.frameLength = AVAudioFrameCount(count)
         data.withUnsafeBytes { raw in
-            for i in 0..<count { out[0][i] = Float(raw.loadUnaligned(fromByteOffset: 44 + i * 2, as: Int16.self)) / 32768 }
+            for i in 0..<count {
+                let l = Float(raw.loadUnaligned(fromByteOffset: 44 + i * 2 * channels, as: Int16.self)) / 32768
+                let r = channels > 1 ? Float(raw.loadUnaligned(fromByteOffset: 46 + i * 2 * channels, as: Int16.self)) / 32768 : l
+                out[0][i] = l; out[1][i] = r
+            }
         }
         node.volume = min(1, Opt.voiceVolume * 1.5) * (ducked ? 0.18 : 1)
         let running = node.isPlaying
@@ -484,6 +512,8 @@ final class Kokoro {
         guard state == .ready, let v = Kokoro.favourites.first(where: { $0.name.lowercased() == wanted.lowercased() && voices.contains($0.id) }) else { return nil }
         voice = v.id
         enabled = true
+        if voice == JarvisVoice.id { DispatchQueue.global().async { _ = JarvisVoice.shared.waitReady(30) } }
+        else { JarvisVoice.shared.shutDown() }       // not in use: give its memory back
         try? voice.write(to: Kokoro.choiceFile, atomically: true, encoding: .utf8)
         makeSystemClips()
         return v.name
@@ -497,6 +527,7 @@ final class Kokoro {
         else if let i = list.firstIndex(where: { $0.id == voice }), i + 1 < list.count { voice = list[i + 1].id }
         else { enabled = false }
         try? (enabled ? voice : "mac").write(to: Kokoro.choiceFile, atomically: true, encoding: .utf8)
+        if enabled && voice == JarvisVoice.id { DispatchQueue.global().async { _ = JarvisVoice.shared.waitReady(30) } } else { JarvisVoice.shared.shutDown() }
         if enabled { makeSystemClips() }
         return enabled ? name : nil
     }

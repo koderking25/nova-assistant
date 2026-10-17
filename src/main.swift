@@ -1662,6 +1662,7 @@ func selfTest(_ engine: Engine, _ midi: MidiIO) -> Never {
     splitNameSelfTest(engine) { check($0, $1, $2) }
     usefulSelfTest(engine) { check($0, $1, $2) }
     didYouMeanSelfTest(engine) { check($0, $1, $2) }
+    jarvisVoiceSelfTest(engine) { check($0, $1, $2) }
     ownVoiceReplayTest(engine) { check($0, $1, $2) }
     looseSelfTest(engine) { check($0, $1, $2) }
     learnSelfTest(engine) { check($0, $1, $2) }
@@ -2289,6 +2290,7 @@ engine.mem.sessions += 1
 engine.restoreAlarms()
 engine.startUpdates()
 VoiceInstaller.placeHelper()
+JarvisVoice.placeHelper()
 // Without a piano there are no button keys to learn. With one, its top key is asked for after the hello.
 if midi.keyboards.isEmpty { engine.awaitingTop = false }
 if !Profile.current.done {

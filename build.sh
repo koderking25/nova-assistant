@@ -8,8 +8,8 @@
 # To release an update: raise "version", say what is new in "notes", run ./build.sh, then deploy the site.
 set -e
 cd "$(dirname "$0")"
-version="1.5.1"
-notes="I hear you far better: no more lost words when I restart listening. Push to talk with Option Space or the Talk button, a Piano Off switch, Mac volume, dark mode, screenshots, lock screen and dictation by voice, and a new band rebuilt from the original."
+version="1.6.0"
+notes="A new Jarvis voice: natural, British and futuristic, with a hologram finish. Say install the Jarvis voice (Apple silicon Macs, about 600 MB)."
 
 work="$(mktemp -d)"
 app="dist/Nova.app"
@@ -36,7 +36,7 @@ lipo -create "$work/ui-arm64.dylib" "$work/ui-x86_64.dylib" -output "$payload/li
 echo "Building the starter…"
 clang -O2 -arch arm64 -arch x86_64 -mmacosx-version-min=13.0 src/ui/host.c -o "$app/Contents/MacOS/Nova"
 
-cp src/reaper/talking_piano_bridge.lua src/kokoro_server.py "$payload/"
+cp src/reaper/talking_piano_bridge.lua src/kokoro_server.py src/jarvis_voice_server.py "$payload/"
 print -n "$version" > "$payload/version.txt"
 
 echo "Drawing the icon…"

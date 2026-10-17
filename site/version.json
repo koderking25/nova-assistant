@@ -1,6 +1,6 @@
 {
-  "version": "1.5.1",
-  "notes": "I hear you far better: no more lost words when I restart listening. Push to talk with Option Space or the Talk button, a Piano Off switch, Mac volume, dark mode, screenshots, lock screen and dictation by voice, and a new band rebuilt from the original.",
+  "version": "1.6.0",
+  "notes": "A new Jarvis voice: natural, British and futuristic, with a hologram finish. Say install the Jarvis voice (Apple silicon Macs, about 600 MB).",
   "url": "https://saynova.app/payload.zip",
-  "sha256": "5a49a64d8c4f75adba36c8c213673578799ec6f9ce5be8617646d733f188ac29"
+  "sha256": "f86d1c65742039a79a067750c43d3d2286272d1131c541dd415d243e836f21f3"
 }

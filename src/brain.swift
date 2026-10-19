@@ -173,8 +173,10 @@ extension Engine {
         if let done = personalityHear(h) { return done }
         if let done = brainHear(h) { return done }
         if let done = goonHear(h) { return done }
+        if let done = accessHear(h) { return done }
         if let done = usefulHear(h) { return done }
         if !h.text.isEmpty { lastDone = h.text }
+        if let done = jarvisStyleHear(h) { return done }
         if let done = jarvisVoiceHear(h) { return done }
         if let done = voiceInstallHear(h) { return done }
         if let done = extrasHear(h) { return done }
@@ -282,6 +284,7 @@ extension Engine {
 
         if let done = macVolumeHear(h) { return done }
         // Sound.
+        if let done = bandFileHear(h) { return done }
         if h.has("band") && h.has("louder", "up", "more") { stdinKey("]"); return "band up" }
         // "Band mode" on its own: play back what was just written with the band, or explain the two ways to get one.
         if ["band mode", "band", "the band", "open band mode", "turn on the band", "start the band", "band on", "start band mode", "go to band mode", "band please", "i want the band"].contains(h.text) {

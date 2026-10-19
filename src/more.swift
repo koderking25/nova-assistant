@@ -44,9 +44,11 @@ extension Engine {
         let slower = h.has("talk slower", "speak slower", "speak more slowly", "talk more slowly", "slow your voice", "talk too fast", "talking too fast", "speak too fast", "slower voice", "slow down your voice", "too fast for me")
         let faster = h.has("talk faster", "speak faster", "speak more quickly", "talk more quickly", "talk too slow", "talking too slow", "talk too slowly", "faster voice", "speed up your voice")
         if slower || faster || h.has("normal voice speed", "normal talking speed", "talk at normal speed", "normal speaking speed") {
-            Kokoro.rate = slower ? max(0.6, Kokoro.rate - 0.12) : faster ? min(1.5, Kokoro.rate + 0.12) : 1
+            // Up to twice as fast: people who use a screen reader often listen at speed.
+            let quick = h.has("much faster", "a lot faster", "way faster", "fastest", "as fast as you can")
+            Kokoro.rate = slower ? max(0.6, Kokoro.rate - 0.12) : faster ? min(2.0, Kokoro.rate + (quick ? 0.4 : 0.15)) : 1
             if !Opt.fast { try? String(format: "%.2f", Kokoro.rate).write(to: Kokoro.rateFile, atomically: true, encoding: .utf8) }
-            let edge = Kokoro.rate <= 0.6 ? " That's as slow as I go." : Kokoro.rate >= 1.5 ? " That's as fast as I go." : ""
+            let edge = Kokoro.rate <= 0.6 ? " That's as slow as I go." : Kokoro.rate >= 2.0 ? " That's as fast as I go." : ""
             reply((slower ? "I'll talk more slowly." : faster ? "I'll talk faster." : "Back to my normal pace.") + edge)
             return slower ? "voice slower" : faster ? "voice faster" : "voice pace"
         }

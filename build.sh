@@ -8,8 +8,8 @@
 # To release an update: raise "version", say what is new in "notes", run ./build.sh, then deploy the site.
 set -e
 cd "$(dirname "$0")"
-version="1.7.0"
-notes="A new holographic look: a living arc-reactor core, a start-up sequence with sound, and a clean dock. The Jarvis voice is now built in."
+version="1.8.0"
+notes="A livelier voice that starts talking while it thinks, a flowing holographic core, the band with any MIDI file, and new reading tools for blind and low-vision users."
 
 work="$(mktemp -d)"
 app="dist/Nova.app"

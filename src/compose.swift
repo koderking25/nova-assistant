@@ -505,6 +505,7 @@ extension Engine {
     // Commands sent by the app window as a line of text.
     func appCommand(_ text: String) {
         if text.hasPrefix("play ") { playFile(String(text.dropFirst(5))); return }
+        if text.hasPrefix("bandfile ") { bandFile(String(text.dropFirst(9))); return }
         let parts = text.split(separator: " ").map(String.init)
         // Every update of what the microphone is hearing: "ear 1 words" when the sentence is finished, "ear 0 words" while it is still going.
         if text.hasPrefix("ear ") {
@@ -685,7 +686,9 @@ extension Engine {
         // With nothing new played, the buttons work on the piece that was saved last,
         // so a saved piece can be heard again without leaving the piano.
         var fromFile = false
-        if take.count < 3, let saved = lastSavedIdea() { take = saved; fromFile = true }
+        // A MIDI file given to the band since the last thing played: the keys work on that.
+        if take.count < 3, importedTake.count >= 3, importedAt > takeStart { take = importedTake; fromFile = true }
+        else if take.count < 3, let saved = lastSavedIdea() { take = saved; fromFile = true }
         guard take.count >= 3 else { run { g in self.say("Play something first.", g) }; return true }
         let a = analyse(take)
         if fromFile, key == keyBack { run { g in self.say("That piece is already saved.", g) }; return true }

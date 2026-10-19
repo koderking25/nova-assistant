@@ -98,14 +98,15 @@ final class Link: ObservableObject {
     var rollLength = 0.0
 
     /// Asks for a MIDI file and plays it.
-    func chooseFile() {
+    func chooseFile(band: Bool = false) {
         let panel = NSOpenPanel()
-        panel.title = "Choose a MIDI file to play"
+        panel.title = band ? "Choose a MIDI file for the band to play with" : "Choose a MIDI file to play"
         panel.allowedContentTypes = [UTType.midi]
         panel.allowsMultipleSelection = false
         let midify = URL(fileURLWithPath: NSHomeDirectory() + "/Music/Nova Songs")
         if FileManager.default.fileExists(atPath: midify.path) { panel.directoryURL = midify }
-        if panel.runModal() == .OK, let url = panel.url { playFile(url) }
+        NSApp.activate(ignoringOtherApps: true)
+        if panel.runModal() == .OK, let url = panel.url { band ? send("~bandfile " + url.path + "\n") : playFile(url) }
     }
 
     func playFile(_ url: URL) {
@@ -121,6 +122,7 @@ final class Link: ObservableObject {
     @Published var settings = false        // the one-screen settings are on screen
     @Published var goon = false            // goon mode: neon frame and title over everything
     @Published var thinking = false        // the AI is working on an answer
+    @Published var activityText = ""       // what it is busy with, in words: "Searching the web"
     @Published var booted = CommandLine.arguments.contains("--snapshot") || CommandLine.arguments.contains("--caption-bench")
     @Published var pianoOn = !FileManager.default.fileExists(atPath: baseDir + "/piano-off.txt")
     @Published var dictating = false
@@ -505,6 +507,8 @@ final class Link: ObservableObject {
             thinking = rest == "1"
             if thinking { Sfx.shared.play(.tool) }
         case "piano": pianoOn = rest == "1"
+        case "pickmidi": DispatchQueue.main.async { self.chooseFile(band: rest == "band") }
+        case "status": activityText = rest
         case "dictation": dictating = rest == "1"
         case "update":
             let parts = rest.components(separatedBy: "|")
@@ -822,7 +826,8 @@ final class VoiceControl: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
     private var fedUntil = 0.0            // the newest sound given to the current request
     // Push to talk: while held (or switched on), whatever is said goes straight to Nova, no name needed.
     @Published var talking = false
-    private var pttText = ""
+    @Published var liveText = ""          // while talking to it: the words so far, shown as they are heard
+    private var pttText = "" { didSet { let t = pttText; DispatchQueue.main.async { self.liveText = t } } }
     private var pttCarried = ""           // what earlier stretches of listening already wrote while talking
     private var pttStarted = 0.0
     private var pttHeldMic = false        // the microphone was opened just for this
@@ -3388,6 +3393,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                      "word 20 7 400", "on 55 90", "on 59 70", "on 62 100", "on 66 64", "out 43 80", "out 71 80",
                      "jazz Swing|The blues scale|Less is more"] { link.handle(line) }
         link.visual = CommandLine.arguments.contains("--visual")
+        if CommandLine.arguments.contains("--thinking") { link.handle("done"); link.handle("think 1"); link.handle("status Searching the web"); link.handle("mode idle") }
         for (i, p) in [48, 52, 55, 60, 64, 67, 72, 76, 79, 84, 61, 70].enumerated() {
             link.ripples.append(Ripple(pitch: p, at: Link.clock() - 0.2 - Double(i) * 0.33, strength: 0.4 + Double(i % 4) * 0.2,
                                        off: i < 3 ? nil : Link.clock() - 0.1 - Double(i) * 0.25))
@@ -3407,7 +3413,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         }
         link.handle("spec 1 0 " + fake)
-        link.speaking = true
+        link.speaking = !CommandLine.arguments.contains("--thinking")
         link.voiceAnchor = Link.clock() - 1.0
         for k in 0..<30 { link.updateBars(at: Link.clock() - 0.5 + Double(k) / 60) }
         for (i, p) in [43, 55, 59, 62, 66, 71, 74].enumerated() {

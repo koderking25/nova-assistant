@@ -159,7 +159,7 @@ final class Kokoro {
     static let rateFile = baseDir.appendingPathComponent("voice-speed.txt")
     static var rate: Double = {
         let saved = (try? String(contentsOf: rateFile, encoding: .utf8)).flatMap { Double($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
-        return max(0.6, min(1.5, saved ?? 1))
+        return max(0.6, min(2.0, saved ?? 1))
     }()
     private var lastRetry = 0.0
     private var speakingNow = 0
@@ -193,14 +193,15 @@ final class Kokoro {
         let speed = String(format: "%.2f", (text.count <= 16 ? 0.98 : 1.06) * Kokoro.rate)
         let text = Kokoro.spoken(text)
         var hash: UInt64 = 1469598103934665603
-        for b in ("v3" + voice + (voice == JarvisVoice.id ? "h1" : speed) + text).utf8 { hash = (hash ^ UInt64(b)) &* 1099511628211 }
+        let jarvisTag = voice == JarvisVoice.id ? "h2" + JarvisVoice.Style.current.tag + String(format: "%.2f", Kokoro.rate) : speed
+        for b in ("v3" + voice + jarvisTag + text).utf8 { hash = (hash ^ UInt64(b)) &* 1099511628211 }
         let keep = text.count <= 60
         let url = keep ? Kokoro.folder.appendingPathComponent("cache/\(String(hash, radix: 16)).wav")
                        : URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tp-kokoro-\(getpid())-\(String(hash, radix: 16)).wav")
         if FileManager.default.fileExists(atPath: url.path) { return url }
         var waited = 0
         while state == .starting, waited < 100 { usleep(100_000); waited += 1 }      // just after launch, the voice is still loading
-        if voice == JarvisVoice.id { return JarvisVoice.shared.write(text, to: url) ? url : nil }
+        if voice == JarvisVoice.id { return JarvisVoice.shared.write(text, to: url, speed: Kokoro.rate) ? url : nil }
         if SherpaVoice.installed {
             guard state == .ready else { return nil }
             return SherpaVoice.write(text, voice: voice, speed: Double(speed) ?? 1, to: url) ? url : nil

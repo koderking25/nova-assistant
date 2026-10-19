@@ -7,6 +7,8 @@
 
 import Foundation
 
+extension String { var nilIfEmpty: String? { isEmpty ? nil : self } }
+
 final class AISession {
     static let shared = AISession()
     private var process: Process?
@@ -16,6 +18,13 @@ final class AISession {
     private var waiting: DispatchSemaphore?
     private var answer = ""
     private var turns = 0
+    // While an answer is being written: everything so far, and what to tell as it grows.
+    private var partial = ""
+    private var onText: ((String) -> Void)?
+    private var onTool: ((String) -> Void)?
+    static var model: String {
+        (try? String(contentsOf: baseDir.appendingPathComponent("ai-model.txt"), encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "sonnet"
+    }
     private(set) var signedOut = false
     /// Claude Code, when it is installed and signed in, is used first: it can search the web.
     /// Otherwise the model built into macOS is used, if this Mac has one.
@@ -74,7 +83,8 @@ final class AISession {
         guard process?.isRunning != true, !signedOut, let path = AI.path else { return }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: path)
-        p.arguments = ["-p", "--model", "haiku", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+        // The answer arrives word by word (partial messages), so speaking can start at the first full sentence.
+        p.arguments = ["-p", "--model", AISession.model, "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
                        "--system-prompt", AISession.persona + "\nSongs in their library: " + library + ".", "--allowedTools", "WebSearch,WebFetch", "--disallowedTools", "Bash,Edit,Write,Read,Agent,NotebookEdit,Glob,Grep"]
         let dir = NSTemporaryDirectory() + "talking-piano-ai"
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
@@ -98,13 +108,33 @@ final class AISession {
 
     func shutDown() { try? input?.close(); process?.terminate() }
 
+    /// Spoken text only: no markdown symbols, and a long dash becomes a pause.
+    static func tidy(_ s: String) -> String {
+        s.replacingOccurrences(of: "*", with: "").replacingOccurrences(of: "#", with: "").replacingOccurrences(of: "\u{2014}", with: ", ")
+            .replacingOccurrences(of: "`", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private func feed(_ data: Data) {
         lock.lock(); defer { lock.unlock() }
         buffer.append(data)
         while let nl = buffer.firstIndex(of: 10) {
             let line = buffer[buffer.startIndex..<nl]
             buffer.removeSubrange(buffer.startIndex...nl)
-            guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any], obj["type"] as? String == "result" else { continue }
+            guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
+            if obj["type"] as? String == "stream_event", let ev = obj["event"] as? [String: Any] {
+                if ev["type"] as? String == "content_block_delta", let d = ev["delta"] as? [String: Any], d["type"] as? String == "text_delta", let t = d["text"] as? String {
+                    partial += t
+                    let f = onText, now = partial
+                    if let f = f { DispatchQueue.global(qos: .userInitiated).async { f(now) } }
+                } else if ev["type"] as? String == "content_block_start", let b = ev["content_block"] as? [String: Any], b["type"] as? String == "tool_use" {
+                    let name = (b["name"] as? String) ?? "tool"
+                    // Text written before a search is a preamble; the answer proper starts after it.
+                    partial += "\n"
+                    if let f = onTool { DispatchQueue.global(qos: .userInitiated).async { f(name) } }
+                }
+                continue
+            }
+            guard obj["type"] as? String == "result" else { continue }
             answer = (obj["result"] as? String) ?? ""
             if (obj["is_error"] as? Bool) == true || answer.contains("authenticate") || answer.contains("401") { signedOut = answer.contains("authenticate") || answer.contains("401"); answer = "" }
             waiting?.signal()
@@ -112,7 +142,7 @@ final class AISession {
     }
 
     /// One turn of the conversation. Returns nil if the AI could not answer.
-    func ask(_ question: String, state: String) -> String? {
+    func ask(_ question: String, state: String, onText: ((String) -> Void)? = nil, onTool: ((String) -> Void)? = nil) -> String? {
         if usingLocal {
             let got = LocalAI.ask("They say: \(question)", instructions: LocalAI.persona) ?? ""
             var clean = got.replacingOccurrences(of: "*", with: "").replacingOccurrences(of: "#", with: "").replacingOccurrences(of: "\u{2014}", with: ", ").replacingOccurrences(of: "You reply:", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -135,6 +165,9 @@ final class AISession {
         let sem = DispatchSemaphore(value: 0)
         waiting = sem
         answer = ""
+        partial = ""
+        self.onText = onText
+        self.onTool = onTool
         turns += 1
         let stale = turns > 40
         let message: [String: Any] = ["type": "user", "message": ["role": "user", "content": [["type": "text", "text": "[\(state)]\n\(question)"]]]]
@@ -146,10 +179,12 @@ final class AISession {
         lock.lock()
         let got = answer
         waiting = nil
+        self.onText = nil
+        self.onTool = nil
         lock.unlock()
         // A long conversation is started afresh now and then, so it stays quick.
         if stale || timedOut { shutDown(); DispatchQueue.global().asyncAfter(deadline: .now() + 1) { self.start() } }
-        let clean = got.replacingOccurrences(of: "*", with: "").replacingOccurrences(of: "#", with: "").replacingOccurrences(of: "—", with: ", ").trimmingCharacters(in: .whitespacesAndNewlines)
+        let clean = AISession.tidy(got)
         return clean.isEmpty ? nil : clean
     }
 }

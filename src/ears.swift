@@ -18,6 +18,7 @@ final class Ears {
     private var lastMiss = 0.0
     private var softUntil = 0.0       // until when a request counts as following a merely possible name
     private var lastChatter = 0.0     // when ordinary talk, not meant for it, was last heard
+    private var lastActed: [String] = [], lastActedAt = -100.0   // the last request acted on, to spot its end being heard twice
     private var credits: [Double] = []   // one for each time it has said its own name and may yet hear it back; each has a time it lapses
     private var stretchStart = true      // the next text begins a new stretch of listening
     private var splitTail = "", splitAt = -100.0, joining = false
@@ -239,6 +240,32 @@ final class Ears {
     func nameHeardForTest(at i: Int) { lock.lock(); nameAt = i; nameSeen = now(); lock.unlock() }
     func speechStartForTest(_ t: Double) { lock.lock(); speechStart = t; lock.unlock() }
 
+    /// Edit distance between two short words.
+    static func distance(_ a: String, _ b: String) -> Int {
+        let x = Array(a), y = Array(b)
+        if x.isEmpty { return y.count }; if y.isEmpty { return x.count }
+        var row = Array(0...y.count)
+        for i in 1...x.count {
+            var prev = row[0]; row[0] = i
+            for j in 1...y.count { let cur = row[j]; row[j] = min(row[j] + 1, row[j - 1] + 1, prev + (x[i - 1] == y[j - 1] ? 0 : 1)); prev = cur }
+        }
+        return row[y.count]
+    }
+    /// Near enough to be the same word misheard: "reader" for "reaper", "branford" for "brantford".
+    static func close(_ a: String, _ b: String) -> Bool {
+        if a == b { return true }
+        guard a.count >= 3, b.count >= 3 else { return false }
+        return distance(a, b) <= max(1, min(a.count, b.count) / 3)
+    }
+    /// Is this the end of the last request, heard a second time ("Samsung" after "make me a sad song")?
+    static func repeatsTail(_ said: [String], of last: [String]) -> Bool {
+        guard !said.isEmpty, said.count < last.count else { return false }
+        let a = said.joined(), b = last.suffix(said.count + 1).joined()
+        let tail = String(b.suffix(a.count + 2))
+        let d = min(distance(a, tail), distance(a, String(b.suffix(a.count))), distance(a, String(last.suffix(said.count).joined())))
+        return Double(d) <= Double(a.count) * 0.34
+    }
+
     static func words(_ s: String) -> [String] {
         s.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
     }
@@ -377,10 +404,17 @@ final class Ears {
         // That includes the end of a sentence in which it said its own name ("say Jarvis, stop, to end it"),
         // which must not be taken as someone calling it and telling it to stop.
         let ownTail = quietFor < 2.2 && said.count >= 2 && own.count >= said.count && Array(own.suffix(said.count)) == said
-        if !interrupted, quietFor < 5, said.allSatisfy({ mine.contains($0) }), ownTail || !said.contains(where: { Ears.wakeWords.contains($0) || Ears.urgent.contains($0) }) {
+        let allMine = said.allSatisfy { w in mine.contains(w) || own.contains { Ears.close(w, $0) } }
+        if !interrupted, quietFor < 5, allMine, ownTail || !said.contains(where: { Ears.wakeWords.contains($0) || Ears.urgent.contains($0) }) {
             handled = text
             log("ignored my own voice")
             return "echo"
+        }
+        // The end of the request just acted on, heard again as the listening restarts.
+        if !interrupted, t - lastActedAt < 4, !said.contains("jarvis"), Ears.repeatsTail(said, of: lastActed) {
+            handled = text
+            log("heard the end of the last request again")
+            return "repeat"
         }
         var request: String? = nil
         var casual = false
@@ -447,6 +481,7 @@ final class Ears {
             self.openUntil = clean.isEmpty ? now() + 10 : 0
             self.handled = text
             self.nameAt = -1
+            if !clean.isEmpty { self.lastActed = Ears.words(clean); self.lastActedAt = now() }
             self.lock.unlock()
             self.log("acting on: \(clean.isEmpty ? "(just the name)" : clean)")
             ui("earreset")
@@ -701,5 +736,31 @@ func splitNameSelfTest(_ engine: Engine, _ check: (String, Bool, String) -> Void
     engine.goHomeQuietly(); engine.lastSpokenAt = now() - 30
     let d = Ears().partial("rvis new composition", final: true, engine: engine)
     check("ears: the name split across two stretches of listening (Ja, then rvis) is still heard; \"rvis\" alone is not", ok && a != "acted" && b == "acted" && c == "acted" && d != "acted" && engine.mode != .compose, "\(a) \(b) \(c) \(ok) \(d)")
+    engine.goHomeQuietly()
+}
+
+/// From the player's log of 17 October: its own "Opening REAPER" came back as "Opening reader" and was acted on,
+/// and the end of a request ("sad song") came back as "Samsung" when the listening restarted.
+func earsEchoSelfTest(_ engine: Engine, _ check: (String, Bool, String) -> Void) {
+    engine.goHomeQuietly()
+    engine.lastSpoken = "Opening REAPER."
+    engine.lastSpokenAt = now() - 1.2
+    let a = Ears().partial("Opening reader", final: true, engine: engine)
+    engine.lastSpoken = "Seven degrees and sunny in Brantford."
+    engine.lastSpokenAt = now() - 1
+    let b = Ears().partial("And sunny in Branford", final: true, engine: engine)
+    engine.lastSpoken = ""; engine.lastSpokenAt = now() - 30
+    let ears = Ears()
+    let c = ears.partial("Jarvis make me a sad song", final: true, engine: engine)
+    engine.lastSpoken = ""; engine.lastSpokenAt = now() - 30
+    let d = ears.partial("Samsung", final: true, engine: engine)
+    let ears2 = Ears()
+    _ = ears2.partial("Jarvis play New York State of Mind on Spotify", final: true, engine: engine)
+    engine.lastSpoken = ""; engine.lastSpokenAt = now() - 30
+    let e = ears2.partial("On Spotify", final: true, engine: engine)
+    engine.goHomeQuietly(); engine.lastSpoken = ""; engine.lastSpokenAt = now() - 30
+    let f = Ears().partial("Jarvis open reader", final: true, engine: engine)        // a real request is still heard
+    check("ears: its own words misheard slightly are still its own, and the end of the last request heard again is let go",
+          a == "echo" && b == "echo" && c == "acted" && d == "repeat" && e == "repeat" && f == "acted", "\(a) \(b) \(c) \(d) \(e) \(f)")
     engine.goHomeQuietly()
 }

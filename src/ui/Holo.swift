@@ -18,6 +18,16 @@ extension Link {
         if VoiceControl.shared.talking { return "LISTENING" }
         return VoiceControl.shared.on ? "STANDING BY" : "VOICE OFF"
     }
+    /// The colour of that activity, as red, green and blue, so it can be blended smoothly.
+    var tintRGB: (Double, Double, Double) {
+        if Link.clock() - flashAt < 0.9, flash == "wrong" { return (1.0, 0.3, 0.32) }
+        switch activity {
+        case "THINKING": return (1.0, 0.72, 0.25)
+        case "LISTENING": return (0.86, 0.98, 1.0)
+        case "OFFLINE", "VOICE OFF": return (0.42, 0.52, 0.58)
+        default: return (0.30, 0.86, 1.0)
+        }
+    }
     /// The colour of that activity.
     var tint: Color {
         if Link.clock() - flashAt < 0.9, flash == "wrong" { return Holo.red }
@@ -47,7 +57,14 @@ struct HoloCore: View {
     let active: Bool
     /// How far the rings have turned and how loud it is, kept outside SwiftUI's state so that
     /// moving them does not ask the whole window to redraw.
-    final class Motion { var spin = 0.0, at = 0.0, level = 0.0 }
+    final class Motion {
+        var spin = 0.0, at = 0.0, level = 0.0
+        var rgb = (0.30, 0.86, 1.0)                     // the colour now, easing towards the activity's colour
+        var lastActivity = "", pulses: [Double] = []     // a ring ripples out whenever the activity changes
+        var flow = 0.0                                   // -1 streaming in (listening), +1 streaming out (speaking), 0 orbiting
+        var comet = 0.0                                  // how bright the thinking comets are
+        lazy var seeds: [(Double, Double, Double)] = (0..<70).map { _ in (Double.random(in: 0...1), Double.random(in: 0...(2 * .pi)), Double.random(in: 0.5...1.5)) }
+    }
     @State private var m = Motion()
 
     var body: some View {
@@ -56,12 +73,23 @@ struct HoloCore: View {
                 let t = Link.clock()
                 let c = CGPoint(x: size.width / 2, y: size.height / 2)
                 let R = min(size.width, size.height) * 0.46
-                let tint = link.tint
+                // The colour melts from one state to the next instead of switching.
+                let want = link.tintRGB
+                let dt0 = min(0.1, max(0, t - m.at))
+                let k = 1 - exp(-dt0 * 5)
+                m.rgb = (m.rgb.0 + (want.0 - m.rgb.0) * k, m.rgb.1 + (want.1 - m.rgb.1) * k, m.rgb.2 + (want.2 - m.rgb.2) * k)
+                let tint = Color(red: m.rgb.0, green: m.rgb.1, blue: m.rgb.2)
+                let activity = link.activity
+                if activity != m.lastActivity { if !m.lastActivity.isEmpty { m.pulses.append(t) }; m.lastActivity = activity }
+                m.pulses.removeAll { t - $0 > 1.2 }
+                let flowWant = activity == "LISTENING" ? -1.0 : activity == "SPEAKING" ? 1.0 : 0.0
+                m.flow += (flowWant - m.flow) * (1 - exp(-dt0 * 3))
+                m.comet += ((activity == "THINKING" ? 1.0 : 0.0) - m.comet) * (1 - exp(-dt0 * 4))
                 // How loud: the voice while speaking, the microphone while listening.
                 let bands = link.voiceBands(at: t)
                 let target = bands.map { $0.reduce(0, +) / Double($0.count) * 1.8 } ?? (voice.talking || voice.on ? voice.level * 1.4 : 0)
                 let calm = Holo.reduceMotion ? 0.15 : 1.0
-                let dt = min(0.1, max(0, t - m.at)); m.at = t
+                let dt = dt0; m.at = t
                 let speed = link.activity == "THINKING" ? 2.6 : link.speaking ? 1.3 : 0.45
                 m.spin += dt * speed * calm
                 m.level += (min(1, target) - m.level) * (1 - exp(-dt * (target > m.level ? 30 : 6)))
@@ -118,6 +146,40 @@ struct HoloCore: View {
                     p.addLine(to: CGPoint(x: c.x + cos(a) * (r0 + len), y: c.y + sin(a) * (r0 + len)))
                     g.stroke(p, with: .color(tint.opacity(0.35 + 0.6 * min(1, v * 1.5))), lineWidth: 2)
                 }
+                // Ripples: a ring travelling outward each time the state changes.
+                for p0 in m.pulses {
+                    let a = (t - p0) / 1.2
+                    let r = R * (0.3 + 0.85 * a)
+                    ring(r, 2.5 * (1 - a), tint.opacity(0.7 * (1 - a)))
+                }
+                // A stream of particles: drawn in while listening, sent out while speaking, orbiting otherwise.
+                if calm > 0.5 {
+                    for (i, s) in m.seeds.enumerated() {
+                        let speedP = 0.12 * s.2
+                        var life = (s.0 + t * speedP).truncatingRemainder(dividingBy: 1)
+                        if m.flow < 0 { life = 1 - life }
+                        let reach = 0.32 + 0.72 * life
+                        let swirl = s.1 + t * 0.25 * s.2 * (i % 2 == 0 ? 1 : -1) + life * 1.6 * m.flow
+                        let r = R * (abs(m.flow) > 0.2 ? reach : 0.62 + 0.25 * sin(s.1 * 3 + t * 0.3))
+                        let fade = abs(m.flow) > 0.2 ? sin(life * .pi) : 0.5
+                        let pt = CGPoint(x: c.x + cos(swirl) * r, y: c.y + sin(swirl) * r)
+                        let size = 1.2 + 1.6 * s.2 * (0.6 + level)
+                        g.fill(Path(ellipseIn: CGRect(x: pt.x - size / 2, y: pt.y - size / 2, width: size, height: size)), with: .color(tint.opacity(0.18 + 0.55 * fade)))
+                    }
+                }
+                // Thinking: two comets chase each other around the core.
+                if m.comet > 0.02 {
+                    for k in 0..<2 {
+                        let head = t * 3.2 + Double(k) * .pi
+                        for j in 0..<18 {
+                            let a = head - Double(j) * 0.07
+                            let r = R * 0.47
+                            let pt = CGPoint(x: c.x + cos(a) * r, y: c.y + sin(a) * r)
+                            let sz = 5.0 * (1 - Double(j) / 18)
+                            g.fill(Path(ellipseIn: CGRect(x: pt.x - sz / 2, y: pt.y - sz / 2, width: sz, height: sz)), with: .color(tint.opacity(m.comet * (1 - Double(j) / 18))))
+                        }
+                    }
+                }
                 // The reactor: a bright core, a triangle, and an inner ring that breathes.
                 let breathe = 0.5 + 0.5 * sin(t * (link.activity == "THINKING" ? 5 : 1.6))
                 let coreR = R * (0.26 + 0.05 * level + 0.012 * breathe * calm)
@@ -151,6 +213,30 @@ struct HoloCore: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(link.assistant) is \(link.activity.lowercased())")
+    }
+}
+
+/// The activity in one word, what it is busy with, and, while talking to it, the words as they are heard.
+struct ActivityLine: View {
+    @ObservedObject var link: Link
+    @ObservedObject var voice = VoiceControl.shared
+    var body: some View {
+        VStack(spacing: 6) {
+            TimelineView(.periodic(from: .now, by: 0.4)) { ctx in
+                let dots = String(repeating: ".", count: Int(ctx.date.timeIntervalSince1970 / 0.4) % 4)
+                let busy = !link.activityText.isEmpty && !link.speaking
+                Text(busy ? link.activityText.uppercased() + dots : link.activity)
+                    .font(Hud.mono(link.large ? 14 : 11, .semibold)).tracking(6).foregroundColor(link.tint)
+                    .shadow(color: link.tint, radius: 8)
+                    .animation(.easeInOut(duration: 0.3), value: busy)
+            }
+            if voice.talking && !voice.liveText.isEmpty {
+                Text(voice.liveText).font(Hud.mono(link.large ? 22 : 16)).foregroundColor(.white.opacity(0.9)).lineLimit(2)
+                    .multilineTextAlignment(.center).transition(.opacity.combined(with: .scale(scale: 0.96)))
+            }
+        }
+        .animation(.easeOut(duration: 0.25), value: voice.talking)
+        .accessibilityHidden(true)
     }
 }
 
@@ -277,13 +363,11 @@ struct HoloConsole: View {
         ZStack {
             HoloBackground(active: active)
             VStack(spacing: 0) {
-                topBar.padding(.horizontal, 22).padding(.top, 30)
+                topBar.scaleEffect(link.large ? 1.2 : 1, anchor: .top).padding(.horizontal, 22).padding(.top, 30)
                 Spacer(minLength: 6)
                 HoloCore(link: link, active: active).frame(maxWidth: 520, maxHeight: 520).padding(.horizontal, 40)
                 VStack(spacing: 8) {
-                    Text(link.activity).font(Hud.mono(11, .semibold)).tracking(6).foregroundColor(link.tint)
-                        .shadow(color: link.tint, radius: 8)
-                        .accessibilityHidden(true)
+                    ActivityLine(link: link)
                     Caption(link: link, active: active).frame(maxWidth: 900)
                     if !link.heard.isEmpty && !link.speaking {
                         Text("\u{201C}" + link.heard + "\u{201D}").font(Hud.mono(12)).foregroundColor(Hud.dim).lineLimit(1)
@@ -297,7 +381,7 @@ struct HoloConsole: View {
                         .padding(12).glass().padding(.horizontal, 22)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
-                dock.padding(.vertical, 16)
+                dock.scaleEffect(link.large ? 1.3 : 1).padding(.vertical, link.large ? 26 : 16)
             }
             .animation(.easeOut(duration: 0.35), value: pianoBusy)
             // Drawers.
@@ -382,6 +466,7 @@ struct HoloConsole: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 HudButton(title: "MIDI FILE", hint: "Choose a MIDI file and watch its notes fall onto the keys") { link.chooseFile() }
+                HudButton(title: "BAND A MIDI", hint: "Choose a MIDI file and the band plays along with it") { link.chooseFile(band: true) }
                 HudButton(title: "VISUALISER", hint: "Open the visualiser: your playing as rising light") { link.visual = true }
                 HudButton(title: "SETTINGS", hint: "Open the settings") { link.settings = true }
             }

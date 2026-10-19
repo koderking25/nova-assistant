@@ -641,7 +641,7 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
 
     // Blocks until the sentence has been spoken or stop() is called.
     func say(_ text: String) {
-        if Opt.textMode || Opt.fast { print(text); return }
+        if Opt.textMode || Opt.fast { print(converseStart > 0 ? String(format: "    [%.1f s] %@", now() - converseStart, text) : text); return }
         // The caption appears at the moment the voice starts, not before: with the Kokoro voice
         // there is a short wait while the sound is prepared, and longer just after launch.
         var shown = false
@@ -911,6 +911,9 @@ final class Engine {
     var lastComposePress = 0.0
     var mem = Memory.load()
     var takeSaved = true
+    var importedTake: [RNote] = []         // a MIDI file given to the band: the band keys use it until something new is played
+    var importedName = ""
+    var importedAt = -1.0
     var resumeWaiting = false
     var lastPauseToggle = 0.0
     var lastStopPress = 0.0
@@ -967,8 +970,15 @@ final class Engine {
     func run(_ body: @escaping (Int) -> Void) {
         lock.lock(); gen += 1; let g = gen; lock.unlock()
         speaker.stop()
-        if Opt.fast { body(g) } else { DispatchQueue.global(qos: .userInitiated).async { body(g) } }
+        if Opt.fast { body(g) } else {
+            Engine.tasksLock.lock(); Engine.tasks += 1; Engine.tasksLock.unlock()
+            DispatchQueue.global(qos: .userInitiated).async { body(g); Engine.tasksLock.lock(); Engine.tasks -= 1; Engine.tasksLock.unlock() }
+        }
     }
+    /// Spoken tasks still running, for checks that wait for the talking to finish.
+    static var tasks = 0
+    static let tasksLock = NSLock()
+    func busy() -> Bool { Engine.tasksLock.lock(); defer { Engine.tasksLock.unlock() }; return Engine.tasks > 0 }
 
     /// Cuts off whatever is being said or played, at once.
     func interrupt() {
@@ -1663,6 +1673,9 @@ func selfTest(_ engine: Engine, _ midi: MidiIO) -> Never {
     usefulSelfTest(engine) { check($0, $1, $2) }
     didYouMeanSelfTest(engine) { check($0, $1, $2) }
     jarvisVoiceSelfTest(engine) { check($0, $1, $2) }
+    earsEchoSelfTest(engine) { check($0, $1, $2) }
+    bandFileSelfTest(engine) { check($0, $1, $2) }
+    accessSelfTest(engine) { check($0, $1, $2) }
     ownVoiceReplayTest(engine) { check($0, $1, $2) }
     looseSelfTest(engine) { check($0, $1, $2) }
     learnSelfTest(engine) { check($0, $1, $2) }
@@ -2010,7 +2023,7 @@ if args.contains("--library") {
 }
 // Checks run from the command line must never disturb the copy the player is using, and a check
 // given too few arguments must stop here, not carry on and start up as a second the assistant.
-let checkFlags = ["--band-lab", "--timing-test", "--brain-test", "--voice-test", "--selftest", "--route", "--chat", "--lookup", "--reband", "--speak", "--ask", "--library", "--daw-test", "--reaper-test", "--new-logic-project", "--mute", "--cold", "--reaper", "--sound-check", "--install-voice", "--install-brain", "--update-test", "--wake-score"]
+let checkFlags = ["--converse", "--band-lab", "--timing-test", "--brain-test", "--voice-test", "--selftest", "--route", "--chat", "--lookup", "--reband", "--speak", "--ask", "--library", "--daw-test", "--reaper-test", "--new-logic-project", "--mute", "--cold", "--reaper", "--sound-check", "--install-voice", "--install-brain", "--update-test", "--wake-score"]
 let isCheck = args.contains { checkFlags.contains($0) }
 if !isCheck, instanceLock >= 0 { becomeOnlyCopy() }
 let midi = MidiIO()
@@ -2024,8 +2037,13 @@ if let i = args.firstIndex(of: "--chat") {
     _ = AISession.shared.ask("Say ready.", state: "warming up")
     for q in CommandLine.arguments.dropFirst(i + 1) {
         let t = now()
-        let a = AISession.shared.ask(q, state: engine.aiState()) ?? "(no answer)"
-        print(String(format: "%.1f s  %@\n        -> %@", now() - t, q, a))
+        var first = -1.0, toolAt = -1.0, toolName = ""
+        let lock = NSLock()
+        let a = AISession.shared.ask(q, state: engine.aiState(), onText: { text in
+            lock.lock(); if first < 0, Engine.sentenceEnd(in: text, from: 0) != nil, !text.hasPrefix("DO") { first = now() - t }; lock.unlock()
+        }, onTool: { name in lock.lock(); if toolAt < 0 { toolAt = now() - t; toolName = name }; lock.unlock() }) ?? "(no answer)"
+        print(String(format: "%.1f s total, first sentence ready at %@%@  %@\n        -> %@", now() - t, first < 0 ? "-" : String(format: "%.1f s", first),
+                     toolAt < 0 ? "" : String(format: ", %@ at %.1f s", toolName, toolAt), q, a))
     }
     AISession.shared.shutDown()
     exit(0)
@@ -2076,6 +2094,25 @@ if args.contains("--reaper-test") {
         exit(0)
     }
     dispatchMain()
+}
+var converseStart = 0.0          // set by --converse, to show when each line would be spoken
+if let i = args.firstIndex(of: "--converse") {
+    // Asks each sentence as if it were spoken, with the AI, and prints what would be said and when. Nothing is carried out aloud.
+    Opt.textMode = true
+    engine.awaitingTop = false
+    AISession.shared.start()
+    _ = AISession.shared.ask("Say ready.", state: "warming up")
+    for q in CommandLine.arguments.dropFirst(i + 1) where !q.hasPrefix("--") {
+        engine.goHomeQuietly(); engine.lastSpoken = ""; engine.lastSpokenAt = 0
+        let t = now(); converseStart = t
+        print(">>> \(q)")
+        let got = engine.hear(q)
+        usleep(300_000)
+        while engine.busy() { usleep(100_000) }
+        print(String(format: "    = %@ (%.1f s)", got, now() - t))
+    }
+    AISession.shared.shutDown()
+    exit(0)
 }
 if let i = args.firstIndex(of: "--route") {
     // Shows how each sentence would be understood, and what would be said, without doing or saying anything.

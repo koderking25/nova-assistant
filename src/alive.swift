@@ -34,7 +34,12 @@ func runTool(_ path: String, _ args: [String], input: String? = nil, timeout: Do
 enum AI {
     static let paths = ["/opt/homebrew/bin/claude", NSHomeDirectory() + "/.local/bin/claude", "/usr/local/bin/claude"]
     // (NOVA_AI=local makes it behave as on a Mac without Claude Code, for checking the built-in model.)
-    static var path: String? { ProcessInfo.processInfo.environment["NOVA_AI"] == "local" ? nil : paths.first { FileManager.default.isExecutableFile(atPath: $0) } }
+    static var path: String? {
+        let env = ProcessInfo.processInfo.environment
+        if env["NOVA_AI"] == "local" { return nil }
+        if let test = env["NOVA_AI_PATH"], FileManager.default.isExecutableFile(atPath: test) { return test }     // a stand-in, for tests
+        return paths.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
     static var persona: String { """
     You are \(Me.name), the voice of a music assistant for \(You.name). \(Profile.current.about.isEmpty ? "" : "About them: " + Profile.current.about + ".") Your words are spoken aloud. Answer in plain sentences with no lists, symbols, markdown or emoji. Keep to \
     two or three short sentences unless asked for more. Be warm, direct and specific, like a good teacher who is also a \
@@ -282,18 +287,43 @@ extension Engine {
             defer { ui("think 0") }
             DispatchQueue.global().asyncAfter(deadline: .now() + 1.3) { if thinking, Engine.effects, self.alive(g) { self.chime([79, 84], vel: 34, hold: 0.25) } }
             var answer = ""
+            var said = 0                     // how much of the arriving answer has already been spoken
+            var streamed = ""                // everything that arrived, as it arrived
             if !Opt.fast {
-                // Looking something up on the web takes a few seconds. Rather than leave a silence, it says so.
-                let done = DispatchSemaphore(value: 0)
-                var got: String? = nil
+                // The answer is spoken a sentence at a time while the rest is still being written.
+                let feed = AnswerStream()
                 let state = self.aiState()
-                DispatchQueue.global(qos: .userInitiated).async { got = session.ask(question, state: state); done.signal() }
-                if done.wait(timeout: .now() + 4.5) == .timedOut {
-                    thinking = false
-                    if self.alive(g) { self.say(pick(["Let me look that up.", "Give me a moment, I'm checking.", "Looking into it."]), g) }
-                    done.wait()
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let got = session.ask(question, state: state, onText: { feed.text($0) }, onTool: { feed.tool($0) })
+                    feed.finish(got)
                 }
-                answer = got ?? ""
+                var filled = false
+                let started = now()
+                while true {
+                    let step = feed.next(timeout: 0.12)
+                    guard self.alive(g) else { return }
+                    streamed = step.text
+                    if let tool = step.tool {
+                        ui("status " + Engine.toolStatus(tool))
+                        if !filled, said == 0 { filled = true; thinking = false; self.say(Engine.filler(for: tool), g) }
+                    }
+                    let body = streamed.trimmingCharacters(in: .whitespacesAndNewlines)
+                    // A command is done, not read out: wait for all of it.
+                    if body.hasPrefix("DO") || (said == 0 && body.contains("DO:")) { if step.done { answer = step.final ?? body; break }; continue }
+                    if step.done { answer = step.final ?? body; break }
+                    guard body.count >= 4 else { continue }     // too short yet to know it isn't a command
+                    while let end = Engine.sentenceEnd(in: streamed, from: said) {
+                        let piece = AISession.tidy(String(streamed.utf16Slice(said, end)))
+                        said = end
+                        if !piece.isEmpty { thinking = false; ui("status "); self.say(piece, g) }
+                        guard self.alive(g) else { return }
+                    }
+                    if !filled, said == 0, now() - started > 4.5 {
+                        filled = true; thinking = false
+                        self.say(pick(["Let me look that up.", "Give me a moment, I'm checking.", "Looking into it."]), g)
+                    }
+                }
+                ui("status ")
             }
             thinking = false
             guard self.alive(g) else { return }
@@ -343,7 +373,9 @@ extension Engine {
             print(answer + "\n")
             // A question back to him can be answered without saying the name again.
             if answer.hasSuffix("?") { self.ears.expectAnswer() }
-            self.say(answer, g)
+            // Whatever was not already spoken while it arrived.
+            let rest = said > 0 ? AISession.tidy(String(streamed.utf16Slice(said, streamed.utf16.count))) : answer
+            if !rest.isEmpty { self.say(rest, g) }
             if answer.hasSuffix("?") { self.ears.expectAnswer() }
             self.resumeAfterHelp(g)
         }
@@ -470,4 +502,67 @@ func aliveSelfTest(_ engine: Engine, _ check: (String, Bool, String) -> Void) {
     check("Logic control: the second key goes back to the quick list", engine.logicPath == nil && engine.mode == .logic, "")
     engine.goHome()
     check("AI: knows the context it will be asked about", engine.aiContext().contains("home") && AI.persona.contains("spoken aloud"), AI.path ?? "claude tool not found")
+}
+
+
+/// An AI answer as it arrives: the text so far, any search it started, and whether it is finished.
+final class AnswerStream {
+    private let lock = NSLock()
+    private let signal = DispatchSemaphore(value: 0)
+    private var body = "", tools: [String] = [], finished = false, last: String?
+    func text(_ t: String) { lock.lock(); body = t; lock.unlock(); signal.signal() }
+    func tool(_ name: String) { lock.lock(); tools.append(name); lock.unlock(); signal.signal() }
+    func finish(_ final: String?) { lock.lock(); finished = true; last = final; lock.unlock(); signal.signal() }
+    func next(timeout: Double) -> (text: String, tool: String?, done: Bool, final: String?) {
+        _ = signal.wait(timeout: .now() + timeout)
+        lock.lock(); defer { lock.unlock() }
+        let t = tools.isEmpty ? nil : tools.removeFirst()
+        return (body, t, finished, last)
+    }
+}
+
+extension String {
+    /// The text between two UTF-16 offsets.
+    func utf16Slice(_ from: Int, _ to: Int) -> Substring {
+        let u = utf16
+        let a = u.index(u.startIndex, offsetBy: min(from, u.count)), b = u.index(u.startIndex, offsetBy: min(max(from, to), u.count))
+        return self[(String.Index(a, within: self) ?? startIndex)..<(String.Index(b, within: self) ?? endIndex)]
+    }
+}
+
+extension Engine {
+    /// Where the next whole sentence ends (a UTF-16 offset), if one has arrived after `from`.
+    static func sentenceEnd(in text: String, from: Int) -> Int? {
+        let u = Array(text.utf16)
+        var i = from
+        while i < u.count - 1 {
+            let c = u[i], n = u[i + 1]
+            // . ! ? followed by a space or new line ends a sentence; so does a new line on its own.
+            let stop = (c == 46 || c == 33 || c == 63) && (n == 32 || n == 10)
+            if (stop && i + 1 - from >= 12) || (c == 10 && i - from >= 12) {
+                // Not "Mr." or "Dr." or "e.g." (a short word before the full stop).
+                var j = i - 1; while j > from, u[j] != 32 { j -= 1 }
+                let word = String(utf16CodeUnits: Array(u[(j + 1)..<i]), count: i - j - 1).lowercased()
+                if c == 46, ["mr", "mrs", "ms", "dr", "st", "vs", "e.g", "i.e", "etc", "no"].contains(word) { i += 1; continue }
+                return i + 1
+            }
+            i += 1
+        }
+        return nil
+    }
+    /// What it says the moment a search starts, so a few seconds of work never sound like silence.
+    static func filler(for tool: String) -> String {
+        switch tool {
+        case "WebSearch": return pick(["Searching.", "Looking that up.", "Checking now."])
+        case "WebFetch": return pick(["Reading the page.", "Opening it up."])
+        default: return pick(["Working on it.", "One moment."])
+        }
+    }
+    static func toolStatus(_ tool: String) -> String {
+        switch tool {
+        case "WebSearch": return "Searching the web"
+        case "WebFetch": return "Reading a page"
+        default: return "Working"
+        }
+    }
 }

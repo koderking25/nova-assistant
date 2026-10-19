@@ -171,7 +171,7 @@ func greetSelfTest(_ engine: Engine, _ check: (String, Bool, String) -> Void) {
     let saved = engine.mem
     Weather.latest = w
     var seen = Set<String>()
-    for _ in 0..<12 { seen.insert(engine.greeting()) }
+    for _ in 0..<20 { seen.insert(engine.greeting()) }
     let sample = engine.greeting()
     Weather.latest = nil
     engine.mem = saved

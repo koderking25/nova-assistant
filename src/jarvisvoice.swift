@@ -49,6 +49,26 @@ final class JarvisVoice {
     }
     static var installed: Bool { appleSilicon && complete(folder) }
 
+    /// How it sounds: which sample it copies, how lively it is, and how strong the hologram finish is.
+    struct Style: Codable, Equatable {
+        var sample = ""            // empty: the voice that comes with it
+        var temp = 1.0
+        var finish = "light"
+        static let file = baseDir.appendingPathComponent("jarvis-voice-style.json")
+        static var current: Style {
+            get { (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode(Style.self, from: $0) } ?? Style() }
+            set { if !Opt.fast, let d = try? JSONEncoder().encode(newValue) { try? d.write(to: file) } }
+        }
+        var tag: String { "\(sample.isEmpty ? "p226" : URL(fileURLWithPath: sample).lastPathComponent)-\(temp)-\(finish)" }
+    }
+
+    /// Changes how it sounds; the helper starts again with the new style.
+    func restyle(_ change: (inout Style) -> Void) {
+        var s = Style.current; change(&s); Style.current = s
+        shutDown()
+        DispatchQueue.global().async { _ = self.waitReady(30) }
+    }
+
     enum State { case off, starting, ready, failed }
     private(set) var state = State.off
     private var process: Process?
@@ -81,6 +101,10 @@ final class JarvisVoice {
         env["HF_HUB_OFFLINE"] = "1"                       // everything it needs is already here: never reach out
         env["HF_HUB_DISABLE_TELEMETRY"] = "1"
         env["TOKENIZERS_PARALLELISM"] = "false"
+        let style = Style.current
+        env["NOVA_VOICE_TEMP"] = String(style.temp)
+        env["NOVA_VOICE_FINISH"] = style.finish
+        env["NOVA_VOICE_SAMPLE"] = style.sample
         p.environment = env
         let inPipe = Pipe(), outPipe = Pipe()
         p.standardInput = inPipe
@@ -126,7 +150,7 @@ final class JarvisVoice {
     }
 
     /// One sentence to a sound file. True when it worked.
-    func write(_ text: String, to url: URL) -> Bool {
+    func write(_ text: String, to url: URL, speed: Double = 1) -> Bool {
         guard waitReady() else { return false }
         lock.lock()
         guard let input = input else { lock.unlock(); return false }
@@ -136,7 +160,7 @@ final class JarvisVoice {
         replies[id] = (sem, "")
         let clean = text.replacingOccurrences(of: "\t", with: " ").replacingOccurrences(of: "\n", with: " ")
         lock.unlock()
-        do { try input.write(contentsOf: Data("\(id)\tjarvis\t1\t\(url.path)\t\(clean)\n".utf8)) } catch { return false }
+        do { try input.write(contentsOf: Data("\(id)\tjarvis\t\(String(format: "%.2f", speed))\t\(url.path)\t\(clean)\n".utf8)) } catch { return false }
         let timedOut = sem.wait(timeout: .now() + 25) == .timedOut
         lock.lock()
         let answer = replies.removeValue(forKey: id)?.1 ?? ""
@@ -208,6 +232,27 @@ final class JarvisVoice {
 }
 
 extension Engine {
+    /// "Be livelier", "calmer", "more robotic", "more natural": how the Jarvis voice delivers.
+    func jarvisStyleHear(_ h: Heard) -> String? {
+        guard Kokoro.shared.voice == JarvisVoice.id, Kokoro.shared.enabled else { return nil }
+        guard h.has("voice", "sound", "talk", "speak", "be", "more", "less", "effect", "yourself") else { return nil }
+        let lively = h.has("livelier", "more lively", "more alive", "more expressive", "more energy", "more emotion", "less flat", "less dead", "less boring", "more excited", "more animated")
+        let calm = h.has("calmer", "more calm", "less lively", "less expressive", "more relaxed", "more steady", "less excited", "tone it down")
+        let robotic = h.has("more robotic", "more robot", "stronger effect", "more hologram", "more futuristic", "more ai", "more like a computer", "more digital")
+        let natural = h.has("more natural", "less robotic", "more human", "lighter effect", "less hologram", "less effect", "less digital")
+        guard lively || calm || robotic || natural else { return nil }
+        let s = JarvisVoice.Style.current
+        if lively && s.temp >= 1.3 || calm && s.temp <= 0.6 { run { g in self.say(lively ? "That's as lively as I get." : "That's as calm as I get.", g) }; return "voice style edge" }
+        JarvisVoice.shared.restyle { st in
+            if lively { st.temp = min(1.3, st.temp + 0.15) }
+            if calm { st.temp = max(0.6, st.temp - 0.15) }
+            if robotic { st.finish = "full" }
+            if natural { st.finish = "light" }
+        }
+        run { g in self.say(lively ? "How's this? A bit more life in it." : calm ? "Calmer. Like this." : robotic ? "Hologram at full strength." : "A more natural sound. Like this.", g) }
+        return "voice style"
+    }
+
     func jarvisVoiceHear(_ h: Heard) -> String? {
         // The wake word is Jarvis too, so "Jarvis, voice louder" must not land here: an action word is needed.
         guard h.has("jarvis voice", "hologram voice", "futuristic voice", "ai voice", "pocket voice", "robot voice", "iron man voice"),

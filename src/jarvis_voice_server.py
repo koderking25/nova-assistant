@@ -4,6 +4,12 @@ Nova starts this once and keeps it running. It reads one request per line,
     id <tab> voice <tab> speed <tab> output path <tab> text
 writes a 16-bit stereo WAV to the path, and answers "id <tab> ok" (or "fail").
 At start it prints "ready <tab> jarvis" once the model and the voice are loaded.
+The speed field (1 = normal, 1.5 = half as fast again) changes the pace without changing the pitch.
+
+Settings, from Nova, in the environment:
+    NOVA_VOICE_SAMPLE   another voice sample to copy (default: voice.wav beside the model)
+    NOVA_VOICE_TEMP     how adventurous the delivery is (default 1.0; the model's own default, 0.7, is flat)
+    NOVA_VOICE_FINISH   "light" (default: keeps the voice's energy) or "full" (the original hologram)
 
 The voice is VCTK speaker p226 (CC BY 4.0, Centre for Speech Technology Research,
 University of Edinburgh), via Kyutai's tts-voices. Pocket TTS is by Kyutai (CC BY 4.0).
@@ -31,7 +37,12 @@ try:
     snap = sorted(glob.glob(os.path.join(FOLDER, "hf/hub/models--mlx-community--pocket-tts-8bit/snapshots/*")))
     model = load_model(snap[-1] if snap else "mlx-community/pocket-tts-8bit")
     SR = model.sample_rate
-    with wave.open(os.path.join(FOLDER, "voice.wav")) as w:
+    model.temp = float(os.environ.get("NOVA_VOICE_TEMP", "1.0"))
+    FINISH = os.environ.get("NOVA_VOICE_FINISH", "light")
+    sample = os.environ.get("NOVA_VOICE_SAMPLE") or ""
+    if not os.path.exists(sample):
+        sample = os.path.join(FOLDER, "voice.wav")
+    with wave.open(sample) as w:
         raw = np.frombuffer(w.readframes(w.getnframes()), np.int16).astype(np.float32) / 32768
         if w.getnchannels() == 2:
             raw = raw.reshape(-1, 2).mean(1)
@@ -66,7 +77,7 @@ def shelf(x, f, gain_db):
     return x + (10 ** (gain_db / 20) - 1) * sosfilt(butter(2, f, "highpass", fs=SR, output="sos"), x)
 
 
-def compress(x, thr_db=-20, ratio=3, att=0.003, rel=0.08):
+def compress(x, thr_db=-20, ratio=3, att=0.003, rel=0.08, makeup=1.6):
     blk = SR // 1000; n = len(x) // blk * blk
     if n == 0:
         return x
@@ -78,7 +89,7 @@ def compress(x, thr_db=-20, ratio=3, att=0.003, rel=0.08):
     thr = 10 ** (thr_db / 20); env = np.maximum(env, 1e-9)
     g = np.where(env < thr, 1.0, (thr * (env / thr) ** (1 / ratio)) / env)
     g = np.concatenate([np.repeat(g, blk), np.full(len(x) - n, g[-1])])
-    return x * g * 1.6
+    return x * g * makeup
 
 
 def vdelay(x, base_ms, depth_ms, rate):
@@ -103,26 +114,56 @@ def room(x, size, mix):
 
 
 def hologram(x):
+    full = FINISH == "full"
     x = sosfilt(LOW_CUT, x)
     x = peak(x, 250, -3, 0.8)
-    x = peak(x, 3000, 7, 0.8)
-    x = shelf(shelf(x, 4500, 9), 8000, 8)
-    x = compress(x)
+    x = peak(x, 3000, 7 if full else 5, 0.8)
+    x = shelf(shelf(x, 4500, 9 if full else 7), 8000, 8 if full else 6)
+    # The light finish squeezes less, so the voice keeps its rise and fall.
+    x = compress(x) if full else compress(x, -16, 1.8, makeup=1.3)
     h = np.abs(x) - np.abs(x).mean()
-    x = x + 0.35 * sosfilt(TOP_BAND, h)
+    x = x + (0.35 if full else 0.22) * sosfilt(TOP_BAND, h)
     tail = np.zeros(int(SR * 0.12), np.float32)        # room for the echo to finish
     x = np.concatenate([x, tail])
-    l = room(x + 0.45 * vdelay(x, 9, 3, 0.25), 0.45, 0.14)
-    r = room(x + 0.45 * vdelay(x, 14, 3, 0.31), 0.50, 0.14)
+    mix = 0.45 if full else 0.28
+    l = room(x + mix * vdelay(x, 9, 3, 0.25), 0.45, 0.14)
+    r = room(x + mix * vdelay(x, 14, 3, 0.31), 0.50, 0.14)
     st = np.stack([l, r], 1)
     return st / max(1e-6, np.abs(st).max()) * 0.89
 
 
-def speak(text, path):
+def stretch(x, speed):
+    """Faster or slower without changing the pitch: overlapping pieces, each lined up with the last."""
+    if abs(speed - 1) < 0.03 or len(x) < SR // 4:
+        return x
+    n = int(SR * 0.03); hop = n // 2; seek = n // 4
+    win = np.hanning(n)
+    out_len = int(len(x) / speed) + n
+    y = np.zeros(out_len); norm = np.zeros(out_len)
+    pos_in, pos_out, prev = 0.0, 0, None
+    while int(pos_in) + n + seek < len(x) and pos_out + n < out_len:
+        start = int(pos_in)
+        if prev is not None:
+            lo, hi = max(0, start - seek), min(len(x) - n, start + seek)
+            best, score = start, -1e18
+            for k in range(lo, hi, 4):
+                c = float(np.dot(x[k:k + hop], prev))
+                if c > score:
+                    best, score = k, c
+            start = best
+        seg = x[start:start + n]
+        y[pos_out:pos_out + n] += seg * win; norm[pos_out:pos_out + n] += win
+        prev = x[start + hop:start + hop + hop]
+        pos_in += hop * speed; pos_out += hop
+    norm[norm < 1e-3] = 1
+    return (y / norm)[:pos_out + hop]
+
+
+def speak(text, path, speed=1.0):
     pieces = [np.array(c).reshape(-1) for c in model.generate_audio_stream(model_state=fresh_state(), text_to_generate=text)]
     if not pieces:
         return False
-    a = hologram(np.concatenate(pieces).astype(np.float64))
+    a = hologram(stretch(np.concatenate(pieces).astype(np.float64), speed))
     tmp = path + ".part"
     with wave.open(tmp, "wb") as w:
         w.setnchannels(2); w.setsampwidth(2); w.setframerate(SR)
@@ -139,8 +180,12 @@ for line in sys.stdin:
     parts = line.rstrip("\n").split("\t")
     if len(parts) < 5:
         continue
-    rid, _voice, _speed, path, text = parts[0], parts[1], parts[2], parts[3], "\t".join(parts[4:])
+    rid, _voice, speed, path, text = parts[0], parts[1], parts[2], parts[3], "\t".join(parts[4:])
     try:
-        out(rid + ("\tok" if speak(text, path) else "\tfail"))
+        sp = max(0.6, min(2.0, float(speed or 1)))
+    except ValueError:
+        sp = 1.0
+    try:
+        out(rid + ("\tok" if speak(text, path, sp) else "\tfail"))
     except Exception as e:  # noqa: BLE001
         out(rid + "\tfail " + str(e).replace("\n", " ")[:200])

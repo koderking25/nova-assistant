@@ -303,7 +303,15 @@ extension Engine {
             let words = c.texts.filter { $0.count > 2 }
             if !words.isEmpty { text += " It says: \(String(words.prefix(6).joined(separator: ". ").prefix(420)))." }
             if !buttons.isEmpty { text += " Buttons: \(spokenList(buttons, limit: 8))." }
-            if words.isEmpty && buttons.isEmpty { text += " I can't read anything inside it. Some apps don't describe their windows." }
+            if words.isEmpty {
+                // The app doesn't describe its window: read the text off the screen instead.
+                run { g in
+                    let lines = ScreenText.capture(pid: pid).map { shot -> [String] in defer { try? FileManager.default.removeItem(at: shot) }; return ScreenText.recognise(shot) } ?? []
+                    let said = lines.isEmpty ? (buttons.isEmpty ? " I can't read anything inside it." : "") : " It says: \(String(lines.joined(separator: ". ").prefix(900)))."
+                    self.say(text + said, g); self.resumeAfterHelp(g)
+                }
+                return "read window"
+            }
             reply(text); return "read window"
         }
         if listMenus {

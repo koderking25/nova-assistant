@@ -36,7 +36,7 @@ lipo -create "$work/ui-arm64.dylib" "$work/ui-x86_64.dylib" -output "$payload/li
 echo "Building the starter…"
 clang -O2 -arch arm64 -arch x86_64 -mmacosx-version-min=13.0 src/ui/host.c -o "$app/Contents/MacOS/Nova"
 
-cp src/reaper/talking_piano_bridge.lua src/kokoro_server.py src/jarvis_voice_server.py src/ui/boot-music.mp3 "$payload/"
+cp src/reaper/talking_piano_bridge.lua src/kokoro_server.py src/jarvis_voice_server.py "$payload/"
 print -n "$version" > "$payload/version.txt"
 
 # The Jarvis voice, built into the app (Apple silicon): its own Python, the speech engine, the model

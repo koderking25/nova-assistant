@@ -1,7 +1,6 @@
 // The holographic console: an arc-reactor core that moves with the voice and the microphone,
 // a quiet top bar, a small dock, and drawers for everything else. Plus the start-up sequence
-// and the interface sounds, which are made here from tones and noise (no recordings needed),
-// with "Impact Prelude" by Kevin MacLeod (incompetech.com, CC BY 4.0) under the start-up.
+// and the interface sounds, which are all made here from tones and noise: no recordings at all.
 
 import AppKit
 import AVFoundation
@@ -563,7 +562,7 @@ struct BootSequence: View {
 // MARK: - Sounds
 
 /// The interface sounds, made from tones and noise when the app starts: nothing to download,
-/// nothing to credit. The start-up also plays "Impact Prelude" underneath, if it is in the app.
+/// nothing to credit.
 final class Sfx {
     static let shared = Sfx()
     enum Cue: CaseIterable { case boot, wake, listen, tool, done, error }
@@ -593,39 +592,28 @@ final class Sfx {
         return true
     }
 
+    /// Saves a sound to a file, for listening to it outside the app. Returns the loudest sample.
+    func save(_ cue: Cue, to path: String) -> Float {
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2), let b = render(cue, format),
+              let file = try? AVAudioFile(forWriting: URL(fileURLWithPath: path), settings: format.settings) else { return -1 }
+        try? file.write(from: b)
+        var peak: Float = 0
+        if let ch = b.floatChannelData { for i in 0..<Int(b.frameLength) { peak = max(peak, abs(ch[0][i]), abs(ch[1][i])) } }
+        return peak
+    }
+
     func play(_ cue: Cue) {
         guard Sfx.enabled else { return }
         queue.async {
             guard self.prepare(), let b = self.buffers[cue] else { return }
             self.player.scheduleBuffer(b, at: nil, options: [], completionHandler: nil)
             if !self.player.isPlaying { self.player.play() }
-            if cue == .boot { self.bootMusic() }
         }
-    }
-
-    private func bootMusic() {
-        let here = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().deletingLastPathComponent()
-        let candidates = [Bundle.main.url(forResource: "boot-music", withExtension: "mp3"), here.appendingPathComponent("boot-music.mp3"),
-                          URL(fileURLWithPath: baseDir + "/app/boot-music.mp3")].compactMap { $0 }
-        guard let url = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }), let file = try? AVAudioFile(forReading: url) else { return }
-        engine.disconnectNodeOutput(music)
-        engine.connect(music, to: engine.mainMixerNode, format: file.processingFormat)
-        // Only the opening swell, faded out under the voice.
-        let frames = AVAudioFrameCount(min(Double(file.length), file.processingFormat.sampleRate * 7))
-        guard let buf = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames), (try? file.read(into: buf, frameCount: frames)) != nil else { return }
-        let fade = Int(file.processingFormat.sampleRate * 2.5), n = Int(buf.frameLength)
-        if let ch = buf.floatChannelData {
-            for c in 0..<Int(buf.format.channelCount) {
-                for i in max(0, n - fade)..<n { ch[c][i] *= Float(n - i) / Float(fade) }
-            }
-        }
-        music.scheduleBuffer(buf, at: nil, options: [], completionHandler: nil)
-        music.play()
     }
 
     // A tone with a quick attack and an exponential tail; a band of noise sweeping between two pitches.
     private func render(_ cue: Cue, _ format: AVAudioFormat) -> AVAudioPCMBuffer? {
-        let length: Double = cue == .boot ? 3.6 : 0.7
+        let length: Double = cue == .boot ? 4.8 : 0.7
         let n = Int(length * rate)
         var out = [Float](repeating: 0, count: n)
         var pan = [Float](repeating: 0, count: n)          // -1 left, +1 right
@@ -662,8 +650,45 @@ final class Sfx {
                 out[start + i] += Float(y * env)
             }
         }
+        // A chord of slightly detuned saw waves through a filter that slowly opens: a cinematic swell.
+        func swell(_ freqs: [Double], at: Double, dur: Double, gain: Double, from: Double = 160, to: Double = 2800) {
+            let start = Int(at * rate), count = Int(dur * rate)
+            var phases = [Double](repeating: 0, count: freqs.count * 2)
+            var lp = 0.0, lp2 = 0.0
+            for i in 0..<count where start + i < n {
+                let x = Double(i) / Double(count)
+                var s = 0.0
+                for (k, f) in freqs.enumerated() {
+                    for d in 0..<2 {
+                        let j = k * 2 + d
+                        phases[j] += (f * (d == 0 ? 0.996 : 1.004)) / rate
+                        s += 2 * (phases[j] - floor(phases[j] + 0.5))
+                    }
+                }
+                s /= Double(freqs.count * 2)
+                let cut = from * pow(to / from, min(1, x * 1.25))
+                let a = 1 - exp(-2 * .pi * cut / rate)
+                lp += a * (s - lp); lp2 += a * (lp - lp2)
+                // Rises slowly, holds, then fades away.
+                let rise = x < 0.6 ? pow(x / 0.6, 2.2) : 1
+                let env = rise * (x > 0.62 ? exp(-(x - 0.62) * 6) : 1)
+                out[start + i] += Float(lp2 * env * gain)
+            }
+        }
+        func boom(at: Double, gain: Double) {
+            let start = Int(at * rate), count = Int(1.6 * rate)
+            var phase = 0.0
+            for i in 0..<count where start + i < n {
+                let x = Double(i) / rate
+                phase += 2 * .pi * (46 + 30 * exp(-x * 9)) / rate
+                out[start + i] += Float(sin(phase) * gain * exp(-x * 2.6) * min(1, x / 0.004))
+            }
+        }
         switch cue {
         case .boot:
+            // Underneath it all: a D minor swell opening up, and a deep boom as it comes online.
+            swell([73.4, 110, 146.8, 174.6, 220, 293.7], at: 0, dur: 4.4, gain: 0.55)
+            boom(at: 2.55, gain: 0.35)
             // Power coming up: a low hum and a rising sweep under stacked fifths.
             noise(dur: 2.4, gain: 0.14, from: 120, to: 5200)
             blip(55, dur: 2.6, wave: 1, gain: 0.10, to: 110)

@@ -3287,6 +3287,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_ note: Notification) {
         let args = CommandLine.arguments
         if args.contains("--caption-bench") { return captionBench() }
+        if let i = args.firstIndex(of: "--boot-sound"), i + 1 < args.count { print("loudest", Sfx.shared.save(.boot, to: args[i + 1])); exit(0) }
         if let i = args.firstIndex(of: "--snapshot"), i + 1 < args.count { return snapshot(to: args[i + 1]) }
         if let i = args.firstIndex(of: "--wake-dir"), i + 2 < args.count { return WakeLab.runFolder(args[i + 1], out: args[i + 2], name: args[safe: i + 3] ?? "Nova") }
         if let i = args.firstIndex(of: "--listen-stream"), i + 2 < args.count { return WakeLab.runStream(args[i + 1], out: args[i + 2]) }

@@ -99,6 +99,8 @@ extension Engine {
 
     /// "Play Clair de Lune with the band", "band a MIDI file", "upload a MIDI for the band".
     func bandFileHear(_ h: Heard) -> String? {
+        // The recogniser often stops after "band a" and loses "MIDI".
+        if ["band a", "band an", "band the", "band a file", "band a song"].contains(h.text) { ui("pickmidi band"); run { g in self.say("Choose the MIDI file in the window that just opened, or say its name with the band.", g) }; return "band file pick" }
         let mentionsFile = h.has("midi", "midi file", "file")
         let withBand = h.has("with the band", "with a band", "for the band", "band mode", "to the band", "band play", "band a", "band this", "band my")
         guard withBand || (mentionsFile && h.has("band")) else { return nil }

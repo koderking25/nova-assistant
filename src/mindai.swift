@@ -26,6 +26,10 @@ final class AISession {
         (try? String(contentsOf: baseDir.appendingPathComponent("ai-model.txt"), encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "sonnet"
     }
     private(set) var signedOut = false
+    private var signedOutAt = 0.0
+    var warned = false                    // the person has been told, once, that Claude is signed out
+    /// Which brain answers: "claude", "built-in" (the Mac's small model) or "none". Shown in the window.
+    var brain: String { (AI.path != nil && !signedOut) ? "claude" : LocalAI.available ? "built-in" : "none" }
     /// Claude Code, when it is installed and signed in, is used first: it can search the web.
     /// Otherwise the model built into macOS is used, if this Mac has one.
     var usingLocal: Bool { (AI.path == nil || signedOut) && LocalAI.available }
@@ -80,6 +84,8 @@ final class AISession {
     func start() {
         lock.lock(); defer { lock.unlock() }
         if AI.path == nil { LocalAI.prewarm(); return }
+        // Signed out a while ago: try again, in case the person has signed in since.
+        if signedOut, now() - signedOutAt > 600 { signedOut = false; logLine("AI: trying Claude again") ; ui("brain claude") }
         guard process?.isRunning != true, !signedOut, let path = AI.path else { return }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: path)
@@ -136,7 +142,14 @@ final class AISession {
             }
             guard obj["type"] as? String == "result" else { continue }
             answer = (obj["result"] as? String) ?? ""
-            if (obj["is_error"] as? Bool) == true || answer.contains("authenticate") || answer.contains("401") { signedOut = answer.contains("authenticate") || answer.contains("401"); answer = "" }
+            if (obj["is_error"] as? Bool) == true || answer.contains("authenticate") || answer.contains("401") {
+                if answer.contains("authenticate") || answer.contains("401") {
+                    if !signedOut { logLine("AI: Claude is signed out (\(answer.prefix(90))); using the built-in model"); ui("brain built-in") }
+                    signedOut = true; signedOutAt = now()
+                    process?.terminate()
+                } else { logLine("AI: Claude answered with an error: \(answer.prefix(120))") }
+                answer = ""
+            }
             waiting?.signal()
         }
     }

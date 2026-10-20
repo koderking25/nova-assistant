@@ -123,6 +123,7 @@ final class Link: ObservableObject {
     @Published var goon = false            // goon mode: neon frame and title over everything
     @Published var thinking = false        // the AI is working on an answer
     @Published var activityText = ""       // what it is busy with, in words: "Searching the web"
+    @Published var brain = ""              // which AI answers: claude, built-in or none
     @Published var booted = CommandLine.arguments.contains("--snapshot") || CommandLine.arguments.contains("--caption-bench")
     @Published var pianoOn = !FileManager.default.fileExists(atPath: baseDir + "/piano-off.txt")
     @Published var dictating = false
@@ -275,6 +276,9 @@ final class Link: ObservableObject {
     static func clock() -> Double { ProcessInfo.processInfo.systemUptime }
 
     func start() {
+        // Check modes draw or measure something and quit: they must never start an engine,
+        // which would stop the copy of Nova the person is using.
+        if ["--snapshot", "--boot-sound", "--caption-bench", "--wake-test", "--wake-dir", "--listen-stream"].contains(where: CommandLine.arguments.contains) { return }
         stopping = false
         state = "STARTING"
         let p = Process()
@@ -509,6 +513,7 @@ final class Link: ObservableObject {
         case "piano": pianoOn = rest == "1"
         case "pickmidi": DispatchQueue.main.async { self.chooseFile(band: rest == "band") }
         case "status": activityText = rest
+        case "brain": brain = rest
         case "dictation": dictating = rest == "1"
         case "update":
             let parts = rest.components(separatedBy: "|")

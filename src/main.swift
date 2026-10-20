@@ -2273,6 +2273,15 @@ if !Opt.textMode {
     DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
         AISession.shared.start()
         _ = AISession.shared.ask("Reply with the single word ready.", state: "the app has just opened")   // so the first real answer is quick
+        let brain = AISession.shared.brain
+        ui("brain " + brain)
+        logLine("AI: " + (brain == "claude" ? "Claude is ready" : brain == "built-in" ? "Claude is unavailable; using the Mac's built-in model" : "no AI available"))
+        // Signed out: say so once, after the greeting, with the fix.
+        if AISession.shared.signedOut, !AISession.shared.warned {
+            AISession.shared.warned = true
+            while engine.lastSpokenAt > now() - 1 { usleep(300_000) }
+            engine.announce("One thing: my main brain, Claude, is signed out, so I can only follow my usual commands and I'm much less clever. To fix it, open Terminal, type claude auth login, press return, and sign in.")
+        }
     }
     Kokoro.shared.start()
     // The things said most often are prepared in the background and kept, so they play instantly.

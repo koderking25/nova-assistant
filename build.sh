@@ -8,7 +8,7 @@
 # To release an update: raise "version", say what is new in "notes", run ./build.sh, then deploy the site.
 set -e
 cd "$(dirname "$0")"
-version="1.8.0"
+version="1.8.1"
 notes="A livelier voice that starts talking while it thinks, a flowing holographic core, the band with any MIDI file, and new reading tools for blind and low-vision users."
 
 work="$(mktemp -d)"
@@ -127,29 +127,36 @@ ln -s /Applications "$stage/Applications"
 rm -f "$work/rw.dmg" dist/Nova.dmg site/Nova.zip
 size=$(( $(du -sm "$stage" | cut -f1) + 60 ))
 hdiutil create -quiet -volname "Nova" -srcfolder "$stage" -fs HFS+ -format UDRW -size ${size}m "$work/rw.dmg"
-mount=$(hdiutil attach -readwrite -noverify -noautoopen "$work/rw.dmg" | grep -o '/Volumes/.*' | head -1)
-osascript <<OSA >/dev/null 2>&1 || echo "  (the window layout could not be set; the image still works)"
-tell application "Finder"
-  tell disk "Nova"
-    open
-    set current view of container window to icon view
-    set toolbar visible of container window to false
-    set statusbar visible of container window to false
-    set bounds of container window to {200, 140, 860, 588}
-    set opts to the icon view options of container window
-    set arrangement of opts to not arranged
-    set icon size of opts to 112
-    set text size of opts to 14
-    set background picture of opts to file ".background:background.png"
-    set position of item "Nova.app" of container window to {170, 218}
-    set position of item "Applications" of container window to {490, 218}
-    update without registering applications
-    delay 1
-    close
+if [[ -f src/ui/dmg-layout.DS_Store ]]; then
+  # The window layout was saved once; reuse it, so no Finder window opens during a build.
+  mount=$(hdiutil attach -readwrite -nobrowse -noverify -noautoopen "$work/rw.dmg" | grep -o '/Volumes/.*' | head -1)
+  cp src/ui/dmg-layout.DS_Store "$mount/.DS_Store"
+  sync; hdiutil detach -quiet "$mount" || hdiutil detach -quiet -force "$mount"
+else
+  mount=$(hdiutil attach -readwrite -noverify -noautoopen "$work/rw.dmg" | grep -o '/Volumes/.*' | head -1)
+  osascript <<OSA >/dev/null 2>&1 || echo "  (the window layout could not be set; the image still works)"
+  tell application "Finder"
+    tell disk "Nova"
+      open
+      set current view of container window to icon view
+      set toolbar visible of container window to false
+      set statusbar visible of container window to false
+      set bounds of container window to {200, 140, 860, 588}
+      set opts to the icon view options of container window
+      set arrangement of opts to not arranged
+      set icon size of opts to 112
+      set text size of opts to 14
+      set background picture of opts to file ".background:background.png"
+      set position of item "Nova.app" of container window to {170, 218}
+      set position of item "Applications" of container window to {490, 218}
+      update without registering applications
+      delay 1
+      close
+    end tell
   end tell
-end tell
 OSA
-sync; hdiutil detach -quiet "$mount" || hdiutil detach -quiet -force "$mount"
+  sync; hdiutil detach -quiet "$mount" || hdiutil detach -quiet -force "$mount"
+fi
 hdiutil convert -quiet "$work/rw.dmg" -format UDZO -imagekey zlib-level=9 -o dist/Nova.dmg
 if [[ -n "$NOVA_SIGN" ]]; then
   codesign --force --timestamp --sign "$NOVA_SIGN" dist/Nova.dmg

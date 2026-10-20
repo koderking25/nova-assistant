@@ -327,6 +327,7 @@ extension Engine {
             }
             thinking = false
             guard self.alive(g) else { return }
+            if !answer.isEmpty { logLine("AI: answered by \(session.brain == "claude" ? "Claude" : "the built-in model")") }
             if answer.isEmpty, !Opt.fast {
                 if !self.warnedNoAI { self.say(pick(["Let me think.", "One moment.", "Thinking."]), g) }
                 answer = AI.ask(question, context: oneShot)
@@ -376,6 +377,11 @@ extension Engine {
             // Whatever was not already spoken while it arrived.
             let rest = said > 0 ? AISession.tidy(String(streamed.utf16Slice(said, streamed.utf16.count))) : answer
             if !rest.isEmpty { self.say(rest, g) }
+            // Once: Claude is signed out, so answers come from the Mac's much smaller model. Say how to fix it.
+            if session.signedOut, !session.warned, AI.path != nil, !Opt.fast, self.alive(g) {
+                session.warned = true
+                self.say("By the way, my main brain, Claude, is signed out, so I'm using the small one built into the Mac, and I'm much less clever. To fix it, open Terminal, type claude auth login, press return, and sign in. I'll pick it up within ten minutes.", g)
+            }
             if answer.hasSuffix("?") { self.ears.expectAnswer() }
             self.resumeAfterHelp(g)
         }

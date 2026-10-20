@@ -1,6 +1,6 @@
 {
-  "version": "1.8.0",
+  "version": "1.8.1",
   "notes": "A livelier voice that starts talking while it thinks, a flowing holographic core, the band with any MIDI file, and new reading tools for blind and low-vision users.",
   "url": "https://saynova.app/payload.zip",
-  "sha256": "60b6f704895d9caca726359e6939924265664bd36ee827fbf4ba3ca9ea7df0f7"
+  "sha256": "b3fddeb8a41b2ee539998944a65151b354de9327f8686447a37deca6038828e3"
 }

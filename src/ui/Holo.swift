@@ -411,6 +411,7 @@ struct HoloConsole: View {
             Chip(label: "VOICE", value: link.voice.isEmpty ? "…" : link.voice.uppercased())
             Chip(label: "PIANO", value: !link.pianoOn ? "IGNORED" : link.keyboards.isEmpty ? "NONE" : "CONNECTED", live: link.pianoOn && !link.keyboards.isEmpty)
             if link.daw { Chip(label: "DAW", value: "LINKED") }
+            if !link.brain.isEmpty { Chip(label: "BRAIN", value: link.brain == "claude" ? "CLAUDE" : link.brain == "built-in" ? "BUILT-IN ONLY" : "OFF", live: link.brain == "claude") }
             if !link.chord.isEmpty { Chip(label: "CHORD", value: link.chord) }
             Text(time).font(Hud.mono(13, .semibold)).foregroundColor(Hud.soft).padding(.leading, 6).accessibilityHidden(true)
         }

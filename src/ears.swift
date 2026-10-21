@@ -18,6 +18,7 @@ final class Ears {
     private var lastMiss = 0.0
     private var softUntil = 0.0       // until when a request counts as following a merely possible name
     private var lastChatter = 0.0     // when ordinary talk, not meant for it, was last heard
+    private var lastOwnNameLog = -100.0
     private var lastActed: [String] = [], lastActedAt = -100.0   // the last request acted on, to spot its end being heard twice
     private var credits: [Double] = []   // one for each time it has said its own name and may yet hear it back; each has a time it lapses
     private var stretchStart = true      // the next text begins a new stretch of listening
@@ -353,7 +354,10 @@ final class Ears {
         let namesNow = Ears.words(fresh).filter { $0 == "jarvis" }.count
         nameIsReal = owners.dropFirst(min(before, owners.count)).contains(false)
         // A name that was only its own voice coming back is taken out, so nothing below mistakes it for a call.
-        if namesNow > 0, !nameIsReal { fresh = fresh.split(separator: " ").filter { Ears.words(String($0)).first != "jarvis" }.joined(separator: " ") }
+        if namesNow > 0, !nameIsReal {
+            if t - lastOwnNameLog > 5 { lastOwnNameLog = t; log("heard the name, but took it for my own voice") }
+            fresh = fresh.split(separator: " ").filter { Ears.words(String($0)).first != "jarvis" }.joined(separator: " ")
+        }
         if speaking || quietFor < 0.6 {
             // While it is talking, the microphone mostly hears its own voice. But the name, or
             // "stop", cuts in: unless it is saying that very word itself.

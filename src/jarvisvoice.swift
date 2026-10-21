@@ -30,8 +30,14 @@ final class JarvisVoice {
     }
     /// The helper script comes with the engine; a copy beside the voice is the fallback.
     static var helper: URL {
-        let beside = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().deletingLastPathComponent().appendingPathComponent("jarvis_voice_server.py")
-        return FileManager.default.fileExists(atPath: beside.path) ? beside : downloaded.appendingPathComponent("jarvis_voice_server.py")
+        let name = "jarvis_voice_server.py"
+        var places = [URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().deletingLastPathComponent().appendingPathComponent(name)]
+        // The app's starter copies a fixed list of files into the Library; older starters leave this one behind,
+        // so the copy inside the app itself is looked for too.
+        if let r = ProcessInfo.processInfo.environment["NOVA_APP_RESOURCES"], !r.isEmpty { places.append(URL(fileURLWithPath: r).appendingPathComponent("payload/" + name)) }
+        places.append(URL(fileURLWithPath: "/Applications/Nova.app/Contents/Resources/payload/" + name))
+        places.append(downloaded.appendingPathComponent(name))
+        return places.first { FileManager.default.fileExists(atPath: $0.path) } ?? places[0]
     }
     private static func complete(_ dir: URL) -> Bool {
         let fm = FileManager.default
@@ -65,11 +71,13 @@ final class JarvisVoice {
     /// Changes how it sounds; the helper starts again with the new style.
     func restyle(_ change: (inout Style) -> Void) {
         var s = Style.current; change(&s); Style.current = s
+        if Opt.fast { return }                    // checks never start the real voice
         shutDown()
         DispatchQueue.global().async { _ = self.waitReady(30) }
     }
 
     enum State { case off, starting, ready, failed }
+    private var failedAt = -100.0
     private(set) var state = State.off
     private var process: Process?
     private var input: FileHandle?
@@ -115,10 +123,14 @@ final class JarvisVoice {
             if data.isEmpty { h.readabilityHandler = nil; return }
             self?.feed(data)
         }
-        p.terminationHandler = { [weak self] _ in
+        p.terminationHandler = { [weak self] ended in
             guard let self = self else { return }
             self.lock.lock()
+            // A helper that was shut down on purpose (and perhaps already replaced) changes nothing.
+            guard ended === self.process else { self.lock.unlock(); return }
+            self.process = nil; self.input = nil
             self.state = .failed
+            self.failedAt = now()
             for (_, r) in self.replies { r.0.signal() }
             self.lock.unlock()
             logLine("Jarvis voice helper stopped")
@@ -126,11 +138,24 @@ final class JarvisVoice {
         do { try p.run(); process = p; input = inPipe.fileHandleForWriting } catch { state = .failed }
     }
 
-    func shutDown() { try? input?.close(); process?.terminate() }
+    /// Stops the helper now. The next sentence starts a fresh one, rather than going to the one that is ending.
+    func shutDown() {
+        lock.lock()
+        let p = process, i = input, waiting = replies
+        process = nil; input = nil; replies = [:]
+        if state != .off { state = .off }
+        buffer = Data()
+        lock.unlock()
+        waiting.values.forEach { $0.0.signal() }
+        try? i?.close(); p?.terminate()
+    }
 
     /// Waits for the voice to finish loading (a few seconds at most). True when it can speak.
     func waitReady(_ seconds: Double = 15) -> Bool {
-        if state == .off || state == .failed { start() }
+        lock.lock(); let st = state, lastFail = failedAt; lock.unlock()
+        // A helper that just failed is not restarted for every sentence: the Mac's voice fills in for half a minute.
+        if st == .failed, now() - lastFail < 30 { return false }
+        if st == .off || st == .failed { start() }
         let until = now() + seconds
         while state == .starting, now() < until { usleep(50_000) }
         return state == .ready
@@ -144,7 +169,7 @@ final class JarvisVoice {
             buffer.removeSubrange(buffer.startIndex...nl)
             let parts = line.components(separatedBy: "\t")
             if parts[0] == "ready" { state = .ready; logLine("Jarvis voice ready") }
-            else if parts[0] == "failed" { state = .failed; logLine("Jarvis voice could not start: \(parts.dropFirst().joined(separator: " "))") }
+            else if parts[0] == "failed" { state = .failed; failedAt = now(); logLine("Jarvis voice could not start: \(parts.dropFirst().joined(separator: " "))") }
             else if let waiting = replies[parts[0]] { replies[parts[0]] = (waiting.0, parts.dropFirst().joined(separator: "\t")); waiting.0.signal() }
         }
     }
@@ -235,7 +260,8 @@ extension Engine {
     /// "Be livelier", "calmer", "more robotic", "more natural": how the Jarvis voice delivers.
     func jarvisStyleHear(_ h: Heard) -> String? {
         guard Kokoro.shared.voice == JarvisVoice.id, Kokoro.shared.enabled else { return nil }
-        guard h.has("voice", "sound", "talk", "speak", "be", "more", "less", "effect", "yourself") else { return nil }
+        // About the voice, not the music: "play something with more energy" is a request for music.
+        guard h.has("voice", "sound", "talk", "speak", "yourself", "you", "your"), !h.has("play", "song", "music", "piece", "band", "track", "melody", "chord", "drums") else { return nil }
         let lively = h.has("livelier", "more lively", "more alive", "more expressive", "more energy", "more emotion", "less flat", "less dead", "less boring", "more excited", "more animated")
         let calm = h.has("calmer", "more calm", "less lively", "less expressive", "more relaxed", "more steady", "less excited", "tone it down")
         let robotic = h.has("more robotic", "more robot", "stronger effect", "more hologram", "more futuristic", "more ai", "more like a computer", "more digital")
@@ -315,4 +341,14 @@ func jarvisVoiceSelfTest(_ engine: Engine, _ check: (String, Bool, String) -> Vo
     engine.pendingConfirm = nil
     check("Jarvis voice: install, use and remove are understood, and \"Jarvis, voice louder\" is left alone",
           !got.contains(nil) && wrong.isEmpty, "\(got) \(wrong)")
+}
+
+func jarvisStyleSelfTest(_ engine: Engine, _ check: (String, Bool, String) -> Void) {
+    let savedVoice = Kokoro.shared.voice, savedOn = Kokoro.shared.enabled
+    Kokoro.shared.voice = JarvisVoice.id; Kokoro.shared.enabled = true
+    let yes = ["can you sound more lively", "make your voice more natural", "talk calmer", "make your voice more robotic"].map { engine.jarvisStyleHear(Heard($0)) }
+    let no = ["play something with more energy", "make the band more exciting", "play a calmer song", "make it more epic"].map { engine.jarvisStyleHear(Heard($0)) }
+    Kokoro.shared.voice = savedVoice; Kokoro.shared.enabled = savedOn
+    check("voice style: lively, calm, robotic and natural change the voice, and the same words about music are left for the music",
+          yes.allSatisfy { $0 != nil } && no.allSatisfy { $0 == nil }, "\(yes) \(no)")
 }

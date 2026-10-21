@@ -274,6 +274,12 @@ final class Link: ObservableObject {
     private var crashes: [Double] = []     // recent unexpected stops, so a restart cannot loop for ever
 
     static func clock() -> Double { ProcessInfo.processInfo.systemUptime }
+    /// The Jarvis voice ships inside this app (Apple silicon builds): no voice needs downloading.
+    static let jarvisVoiceBuiltIn: Bool = {
+        var arm: Int32 = 0; var size = MemoryLayout<Int32>.size
+        let silicon = sysctlbyname("hw.optional.arm64", &arm, &size, nil, 0) == 0 && arm == 1
+        return silicon && FileManager.default.fileExists(atPath: (Bundle.main.resourcePath ?? "") + "/jarvis-voice/python/bin/python3")
+    }()
 
     func start() {
         // Check modes draw or measure something and quit: they must never start an engine,
@@ -834,6 +840,9 @@ final class VoiceControl: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
     @Published var liveText = ""          // while talking to it: the words so far, shown as they are heard
     private var pttText = "" { didSet { let t = pttText; DispatchQueue.main.async { self.liveText = t } } }
     private var pttCarried = ""           // what earlier stretches of listening already wrote while talking
+    // For the log only (never what was said): how much sound arrived, how often the recogniser wrote anything,
+    // and how often it gave up, so a deaf microphone or a stuck recogniser can be told apart afterwards.
+    private var heardPeak = 0.0, updates = 0, quietEnds = 0, restarts: [Double] = []
     private var pttStarted = 0.0
     private var pttHeldMic = false        // the microphone was opened just for this
     var pttToggle = false                 // switched on with a tap: ends by itself after a pause
@@ -915,6 +924,19 @@ final class VoiceControl: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
         micName = mic.localizedName
         queue.async { s.startRunning() }
         log("using microphone: \(mic.localizedName)")
+        let startCount = buffers
+        heardPeak = 0
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+            let got = self.buffers - startCount
+            self.log(String(format: "first four seconds: %d pieces of sound, loudest %.3f%@", got, self.heardPeak,
+                            got == 0 ? ". The microphone is sending nothing" : self.heardPeak < 0.0002 ? ". The microphone is sending silence" : ""))
+            // Pure silence (not just a quiet room) usually means macOS is withholding the microphone from this copy of
+            // the app, even though it reports permission. Say so, with the fix, rather than appear deaf.
+            if got == 0 || self.heardPeak < 0.0002 {
+                self.status = "MICROPHONE SILENT"
+                Link.shared.send("~speak I can't hear the microphone. macOS may be blocking it. Open System Settings, Privacy and Security, Microphone, switch Nova off and on again, then quit me and open me again.\n")
+            }
+        }
         return true
     }
 
@@ -948,6 +970,7 @@ final class VoiceControl: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
         }
         buffers += 1
         loudest = max(loudest, peak)
+        heardPeak = max(heardPeak, peak)
         let t = Link.clock()
         if t - lastReport > 0.08 {
             let shown = min(1, loudest * 6)
@@ -958,7 +981,10 @@ final class VoiceControl: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
             DispatchQueue.main.async {
                 self.level = shown
                 Link.shared.send(String(format: "~lvl %.4f\n", top))
-                if report { self.log(String(format: "hearing sound: %d buffers so far, recent peak %.3f", count, top)) }
+                if report {
+                    self.log(String(format: "hearing sound: %d buffers so far, recent peak %.3f; the recogniser wrote %d times, stopped on silence %d times", count, top, self.updates, self.quietEnds))
+                    self.updates = 0; self.quietEnds = 0
+                }
             }
         }
     }
@@ -994,6 +1020,15 @@ final class VoiceControl: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
         request?.endAudio()
         guard on || talking else { return }
         guard let recognizer = recognizer, recognizer.isAvailable else { status = "RECOGNISER UNAVAILABLE"; log("the speech recogniser is not available"); return }
+        // A recogniser that fails the moment it starts would be restarted endlessly and hear nothing: slow down.
+        let tNow = Link.clock()
+        restarts = restarts.filter { tNow - $0 < 3 } + [tNow]
+        if restarts.count > 8 {
+            restarts = []
+            log("the recogniser keeps stopping straight away; waiting a moment")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.listen() }
+            return
+        }
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
         // The promise is that speech never leaves this Mac. If macOS cannot do that here, Nova does not listen.
@@ -1020,14 +1055,17 @@ final class VoiceControl: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
         status = "LISTENING FOR \u{201C}\(Link.shared.assistant.uppercased())\u{201D}"
         task = recognizer.recognitionTask(with: req) { [weak self] result, error in
             DispatchQueue.main.async {
-                guard let self = self, self.on, self.request === req else { return }
+                // Results count while listening for the name, and while being talked to with the ears otherwise off.
+                guard let self = self, self.on || self.talking, self.request === req else { return }
                 if let r = result {
+                    self.updates += 1
                     if let last = r.bestTranscription.segments.last, last.duration > 0 { self.lastWordEnd = self.requestStart + last.timestamp + last.duration }
                     self.transcript(r.bestTranscription.formattedString, final: r.isFinal)
                 }
                 if let e = error as NSError? {
                     // "No speech detected" simply means a quiet minute; anything else is worth writing down.
                     if !(e.domain == "kAFAssistantErrorDomain" && [1110, 203, 216, 301].contains(e.code)) { self.log("recogniser error \(e.domain) \(e.code): \(e.localizedDescription)") }
+                    else { self.quietEnds += 1 }
                 }
                 if error != nil || (result?.isFinal ?? false) {
                     // Straight away: the sound in between is kept and handed over, so nothing is lost.
@@ -2678,7 +2716,7 @@ struct WelcomeScreen: View {
         case 3: return "Up and down arrows switch between Celsius and Fahrenheit."
         case 4: return "Left and right arrows choose the month, up and down the day."
         case 5: return "Tab moves between these. Space switches one on or off."
-        case 6: return "Left and right arrows choose. Up and down switch the natural voice."
+        case 6: return Link.jarvisVoiceBuiltIn ? "Left and right arrows choose." : "Left and right arrows choose. Up and down switch the natural voice."
         default: return "Return continues."
         }
     }
@@ -2803,7 +2841,10 @@ struct WelcomeScreen: View {
                     choice("NOT NOW", !listen) { listen = false }
                 }
                 VStack(spacing: 10) {
-                    toggle("Give me my natural voice", "A free, one time download of about 370 megabytes, fetched in the background. It runs on this Mac and sounds far more human.", $natural)
+                    // With the Jarvis voice inside the app there is nothing to fetch.
+                    if !Link.jarvisVoiceBuiltIn {
+                        toggle("Give me my natural voice", "A free, one time download of about 370 megabytes, fetched in the background. It runs on this Mac and sounds far more human.", $natural)
+                    }
                     toggle("Give me a brain of my own", "So I can answer anything and understand you however you put it. About one gigabyte, once. It runs on this Mac with no internet. Not needed if this Mac has Apple Intelligence.", $brain)
                 }
                 .frame(maxWidth: 640)
@@ -3240,7 +3281,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         let quit = NSMenuItem(title: "Quit Nova", action: #selector(quitApp), keyEquivalent: "")
         let natural = NSMenuItem(title: "Install the natural voice\u{2026}", action: #selector(naturalVoice), keyEquivalent: "")
         let talk = NSMenuItem(title: "Talk to \(Link.shared.assistant)  (\u{2325}Space)", action: #selector(talkNow), keyEquivalent: "")
-        for i in [open, talk, again, natural, .separator(), listening, piano, panel, login, .separator(), tour, quit] { i.target = self; menu.addItem(i) }
+        for i in [open, talk, again, natural, .separator(), listening, piano, panel, login, .separator(), tour, quit] where !(i === natural && Link.jarvisVoiceBuiltIn) { i.target = self; menu.addItem(i) }
         item.menu = menu
         self.item = item
     }

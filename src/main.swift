@@ -505,10 +505,16 @@ final class VoiceMeter {
         queue.async {
             guard data.count > 46 else { return }
             let rate = Double(data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 24, as: UInt32.self) })
-            let count = (data.count - 44) / 2
+            // One or two channels (the Jarvis voice is stereo): both sides are averaged into one.
+            let channels = max(1, Int(data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 22, as: UInt16.self) }))
+            let count = (data.count - 44) / (2 * channels)
             var samples = [Float](repeating: 0, count: count)
             data.withUnsafeBytes { raw in
-                for i in 0..<count { samples[i] = Float(raw.loadUnaligned(fromByteOffset: 44 + i * 2, as: Int16.self)) / 32768 }
+                for i in 0..<count {
+                    var sum: Float = 0
+                    for c in 0..<channels { sum += Float(raw.loadUnaligned(fromByteOffset: 44 + (i * channels + c) * 2, as: Int16.self)) }
+                    samples[i] = sum / Float(channels) / 32768
+                }
             }
             let hop = rate / 60
             var frame = 0
@@ -1676,6 +1682,7 @@ func selfTest(_ engine: Engine, _ midi: MidiIO) -> Never {
     earsEchoSelfTest(engine) { check($0, $1, $2) }
     bandFileSelfTest(engine) { check($0, $1, $2) }
     accessSelfTest(engine) { check($0, $1, $2) }
+    jarvisStyleSelfTest(engine) { check($0, $1, $2) }
     ownVoiceReplayTest(engine) { check($0, $1, $2) }
     looseSelfTest(engine) { check($0, $1, $2) }
     learnSelfTest(engine) { check($0, $1, $2) }
@@ -2023,7 +2030,7 @@ if args.contains("--library") {
 }
 // Checks run from the command line must never disturb the copy the player is using, and a check
 // given too few arguments must stop here, not carry on and start up as a second the assistant.
-let checkFlags = ["--converse", "--band-lab", "--timing-test", "--brain-test", "--voice-test", "--selftest", "--route", "--chat", "--lookup", "--reband", "--speak", "--ask", "--library", "--daw-test", "--reaper-test", "--new-logic-project", "--mute", "--cold", "--reaper", "--sound-check", "--install-voice", "--install-brain", "--update-test", "--wake-score"]
+let checkFlags = ["--ai-queue-test", "--converse", "--band-lab", "--timing-test", "--brain-test", "--voice-test", "--selftest", "--route", "--chat", "--lookup", "--reband", "--speak", "--ask", "--library", "--daw-test", "--reaper-test", "--new-logic-project", "--mute", "--cold", "--reaper", "--sound-check", "--install-voice", "--install-brain", "--update-test", "--wake-score"]
 let isCheck = args.contains { checkFlags.contains($0) }
 if !isCheck, instanceLock >= 0 { becomeOnlyCopy() }
 let midi = MidiIO()
@@ -2094,6 +2101,19 @@ if args.contains("--reaper-test") {
         exit(0)
     }
     dispatchMain()
+}
+if args.contains("--ai-queue-test") {
+    // Two questions overlapping, as when someone interrupts and asks again: each must get its own answer.
+    AISession.shared.start()
+    var first: String? = nil
+    let done = DispatchSemaphore(value: 0)
+    DispatchQueue.global().async { first = AISession.shared.ask("slow question", state: "test"); done.signal() }
+    usleep(500_000)
+    let second = AISession.shared.ask("quick question", state: "test")
+    done.wait()
+    let highway = AISession.shared.ask("tell me about highway 401", state: "test")
+    print("first: \(first ?? "nil")\nsecond: \(second ?? "nil")\nhighway: \(highway ?? "nil")\nsigned out: \(AISession.shared.signedOut)")
+    AISession.shared.shutDown(); exit(0)
 }
 var converseStart = 0.0          // set by --converse, to show when each line would be spoken
 if let i = args.firstIndex(of: "--converse") {
@@ -2276,12 +2296,8 @@ if !Opt.textMode {
         let brain = AISession.shared.brain
         ui("brain " + brain)
         logLine("AI: " + (brain == "claude" ? "Claude is ready" : brain == "built-in" ? "Claude is unavailable; using the Mac's built-in model" : "no AI available"))
-        // Signed out: say so once, after the greeting, with the fix.
-        if AISession.shared.signedOut, !AISession.shared.warned {
-            AISession.shared.warned = true
-            while engine.lastSpokenAt > now() - 1 { usleep(300_000) }
-            engine.announce("One thing: my main brain, Claude, is signed out, so I can only follow my usual commands and I'm much less clever. To fix it, open Terminal, type claude auth login, press return, and sign in.")
-        }
+        // Signed out: the window shows it, and it is mentioned the first time the AI is actually needed,
+        // not at start-up, where a long speech kept it from listening.
     }
     Kokoro.shared.start()
     // The things said most often are prepared in the background and kept, so they play instantly.

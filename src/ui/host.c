@@ -17,7 +17,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static const char *files[] = { "libNovaUI.dylib", "nova-engine", "kokoro_server.py", "talking_piano_bridge.lua", "version.txt", NULL };
+static const char *files[] = { "libNovaUI.dylib", "nova-engine", "kokoro_server.py", "jarvis_voice_server.py", "talking_piano_bridge.lua", "version.txt", NULL };
 
 static void make_dirs(const char *path) {
     char tmp[PATH_MAX];

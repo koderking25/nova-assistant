@@ -32,13 +32,17 @@ enum ScreenText {
         return recognise(cg)
     }
     static func recognise(_ cg: CGImage) -> [String] {
-        let req = VNRecognizeTextRequest()
-        req.recognitionLevel = .accurate
-        req.usesLanguageCorrection = true
-        try? VNImageRequestHandler(cgImage: cg, options: [:]).perform([req])
-        let obs = (req.results ?? []).compactMap { o -> (CGRect, String)? in
-            guard let t = o.topCandidates(1).first, t.confidence > 0.3 else { return nil }
-            return (o.boundingBox, t.string)
+        // The accurate reader uses the Neural Engine, which can fail when memory is short; the fast one then fills in.
+        var obs: [(CGRect, String)] = []
+        for level in [VNRequestTextRecognitionLevel.accurate, .fast] where obs.isEmpty {
+            let req = VNRecognizeTextRequest()
+            req.recognitionLevel = level
+            req.usesLanguageCorrection = true
+            do { try VNImageRequestHandler(cgImage: cg, options: [:]).perform([req]) } catch { continue }
+            obs = (req.results ?? []).compactMap { o -> (CGRect, String)? in
+                guard let t = o.topCandidates(1).first, t.confidence > 0.3 else { return nil }
+                return (o.boundingBox, t.string)
+            }
         }
         // Vision measures from the bottom left; lines whose middles are close count as one line.
         let sorted = obs.sorted { a, b in abs(a.0.midY - b.0.midY) < 0.012 ? a.0.minX < b.0.minX : a.0.midY > b.0.midY }
@@ -212,7 +216,7 @@ extension Engine {
                                                "Describe the image at \(pic.path) for someone who is blind, as you would say it out loud: what it is first, then the important details and any text that matters. Plain speech, no lists or symbols, at most five sentences."], timeout: 90)
                     ui("think 0"); ui("status ")
                     let said = AISession.tidy(r.out)
-                    if r.ok, !said.isEmpty, !said.contains("401"), !said.lowercased().contains("authenticate") { self.say(said, g); return }
+                    if r.ok, !said.isEmpty, !AI.authFailed(said) { self.say(said, g); return }
                 }
                 let labels = ScreenText.labels(pic), words = ScreenText.recognise(pic)
                 self.say((labels.isEmpty ? "I can't tell what the picture shows." : "It looks like: \(spokenList(labels, limit: 5)).") + (words.isEmpty ? "" : " It says: \(String(words.joined(separator: ". ").prefix(600)))."), g)

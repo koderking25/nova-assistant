@@ -8,7 +8,7 @@
 # To release an update: raise "version", say what is new in "notes", run ./build.sh, then deploy the site.
 set -e
 cd "$(dirname "$0")"
-version="1.8.1"
+version="1.8.2"
 notes="A livelier voice that starts talking while it thinks, a flowing holographic core, the band with any MIDI file, and new reading tools for blind and low-vision users."
 
 work="$(mktemp -d)"

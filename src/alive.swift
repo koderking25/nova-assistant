@@ -32,6 +32,10 @@ func runTool(_ path: String, _ args: [String], input: String? = nil, timeout: Do
 // Uses the Claude command-line tool that is already on this Mac, signed in with the
 // player's own Claude account. Nothing is sent anywhere unless a question is asked.
 enum AI {
+    /// Claude's own sign-in errors, and nothing else: an answer about Highway 401 is still an answer.
+    static func authFailed(_ text: String) -> Bool {
+        text.hasPrefix("Failed to authenticate") || text.contains("API Error: 401") || text.contains("OAuth access token") || text.hasPrefix("Invalid API key")
+    }
     static let paths = ["/opt/homebrew/bin/claude", NSHomeDirectory() + "/.local/bin/claude", "/usr/local/bin/claude"]
     // (NOVA_AI=local makes it behave as on a Mac without Claude Code, for checking the built-in model.)
     static var path: String? {
@@ -70,7 +74,7 @@ enum AI {
         let r = runTool(path, ["-p", "--model", "haiku", "--system-prompt", persona + "\n\nWhat you know right now:\n" + context,
                                "--disallowedTools", "Bash,Edit,Write,Read,WebFetch,WebSearch,Agent"],
                         input: question, timeout: 60, cwd: dir)
-        if r.out.contains("authenticate") || r.out.contains("401") || r.out.contains("/login") {
+        if AI.authFailed(r.out) || r.out.contains("Please run /login") {
             return "The AI is not signed in yet. Open a Terminal window, type claude, press Return, and sign in with your Claude account. After that I can answer."
         }
         if !r.ok || r.out.isEmpty { return "I could not reach the AI just now." }
@@ -309,7 +313,7 @@ extension Engine {
                     }
                     let body = streamed.trimmingCharacters(in: .whitespacesAndNewlines)
                     // A command is done, not read out: wait for all of it.
-                    if body.hasPrefix("DO") || (said == 0 && body.contains("DO:")) { if step.done { answer = step.final ?? body; break }; continue }
+                    if body.hasPrefix("DO:") || (body.count < 3 && "DO:".hasPrefix(body)) || (said == 0 && body.contains("DO:")) { if step.done { answer = step.final ?? body; break }; continue }
                     if step.done { answer = step.final ?? body; break }
                     guard body.count >= 4 else { continue }     // too short yet to know it isn't a command
                     while let end = Engine.sentenceEnd(in: streamed, from: said) {
@@ -380,7 +384,7 @@ extension Engine {
             // Once: Claude is signed out, so answers come from the Mac's much smaller model. Say how to fix it.
             if session.signedOut, !session.warned, AI.path != nil, !Opt.fast, self.alive(g) {
                 session.warned = true
-                self.say("By the way, my main brain, Claude, is signed out, so I'm using the small one built into the Mac, and I'm much less clever. To fix it, open Terminal, type claude auth login, press return, and sign in. I'll pick it up within ten minutes.", g)
+                self.say("By the way, Claude is signed out, so that answer came from the Mac's smaller brain. To fix it, type claude auth login in Terminal.", g)
             }
             if answer.hasSuffix("?") { self.ears.expectAnswer() }
             self.resumeAfterHelp(g)

@@ -98,6 +98,17 @@ extension Engine {
                 if h.has("what is the volume", "whats the volume", "how loud", "volume level", "current volume") {
                     reply(macVolume().map { "The volume is at \($0) percent." } ?? "I couldn't read the volume."); return "volume?"
                 }
+                // Some outputs, such as a USB audio interface, have no volume the Mac can set: then
+                // "louder" and "quieter" mean Nova's own voice, as they did before.
+                let current = macVolume()
+                if current == nil, !Opt.fast {
+                    let up = h.has("up", "louder", "raise", "increase", "higher")
+                    if h.has("down", "quieter", "lower", "decrease", "softer") != up {
+                        stdinKey(up ? "." : ",")
+                        return up ? "voice up" : "voice down"
+                    }
+                    reply("This sound output has no volume I can change from the Mac. Use the volume knob on the device itself."); return "volume none"
+                }
                 if let n = h.number, h.has("volume", "to", "at"), (0...100).contains(n) {
                     reply(setMacVolume(n) ? "Volume \(n)." : "I couldn't change the volume."); return "volume \(n)"
                 }
@@ -105,7 +116,7 @@ extension Engine {
                 let down = h.has("down", "quieter", "lower", "decrease", "softer")
                 if up != down {
                     let step = h.has("a lot", "much", "way") ? 25 : h.has("a little", "a bit", "slightly", "tiny") ? 6 : 12
-                    let now = macVolume() ?? 50
+                    let now = current ?? 50
                     let to = max(0, min(100, now + (up ? step : -step)))
                     if setMacVolume(to) { reply(to >= 100 ? "That's as loud as it goes." : to <= 0 ? "Volume all the way down." : (up ? "Louder. " : "Quieter. ") + "\(to) percent."); return up ? "volume up" : "volume down" }
                     reply("I couldn't change the volume."); return "volume failed"
@@ -124,6 +135,10 @@ extension Engine {
         if h.has("stop dictation", "stop dictating", "end dictation", "dictation off", "stop typing") { _ = usefulHear(h); return true }
         let clean = text.trimmingCharacters(in: .whitespaces)
         guard !clean.isEmpty else { return true }
+        // Its own voice is never typed: nothing heard while it talks, nor words that are mostly its last sentence.
+        if lastSpokenAt > now() - 1.2 { return true }
+        let own = Ears.words(lastSpoken), heard = Ears.words(clean)
+        if now() - lastSpokenAt < 5, !heard.isEmpty, Double(heard.filter { w in own.contains { Ears.close($0, w) } }.count) / Double(heard.count) > 0.7 { return true }
         if Opt.fast { return true }
         let out = clean.prefix(1).uppercased() + clean.dropFirst() + (clean.last.map { ".?!,".contains($0) } == true ? " " : ". ")
         _ = LogicControl.osa("tell application \"System Events\" to keystroke \(LogicControl.quote(out))")

@@ -1,2 +1,2 @@
 // Written by build.sh. The version of this build.
-let novaVersion = "1.8.1"
+let novaVersion = "1.8.2"

@@ -571,26 +571,29 @@ final class Sfx {
         get { !UserDefaults.standard.bool(forKey: "sfxOff") }
         set { UserDefaults.standard.set(!newValue, forKey: "sfxOff") }
     }
-    private let engine = AVAudioEngine()
-    private let player = AVAudioPlayerNode()
-    private let music = AVAudioPlayerNode()
+    // Plain players, not an audio engine: an engine in the window's process set up a combined audio
+    // device that, on some Macs, left the microphone silent.
     private let rate = 44100.0
-    private var buffers: [Cue: AVAudioPCMBuffer] = [:]
-    private var ready = false
+    private var sounds: [Cue: Data] = [:]
+    private var playing: [AVAudioPlayer] = []
     private let queue = DispatchQueue(label: "nova.sfx")
 
-    private func prepare() -> Bool {
-        if ready { return engine.isRunning || (try? engine.start()) != nil }
-        guard let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2) else { return false }
-        engine.attach(player); engine.attach(music)
-        engine.connect(player, to: engine.mainMixerNode, format: format)
-        engine.connect(music, to: engine.mainMixerNode, format: nil)
-        player.volume = 0.55
-        music.volume = 0.32
-        for cue in Cue.allCases { buffers[cue] = render(cue, format) }
-        do { try engine.start() } catch { return false }
-        ready = true
-        return true
+    /// A sound as a WAV file in memory.
+    private func wav(_ cue: Cue) -> Data? {
+        if let d = sounds[cue] { return d }
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2), let b = render(cue, format), let ch = b.floatChannelData else { return nil }
+        let n = Int(b.frameLength)
+        var d = Data()
+        func u32(_ v: UInt32) { var x = v.littleEndian; d.append(Data(bytes: &x, count: 4)) }
+        func u16(_ v: UInt16) { var x = v.littleEndian; d.append(Data(bytes: &x, count: 2)) }
+        d.append(contentsOf: Array("RIFF".utf8)); u32(UInt32(36 + n * 4)); d.append(contentsOf: Array("WAVEfmt ".utf8))
+        u32(16); u16(1); u16(2); u32(UInt32(rate)); u32(UInt32(rate) * 4); u16(4); u16(16)
+        d.append(contentsOf: Array("data".utf8)); u32(UInt32(n * 4))
+        var pcm = [Int16](repeating: 0, count: n * 2)
+        for i in 0..<n { pcm[i * 2] = Int16(max(-1, min(1, ch[0][i])) * 32767); pcm[i * 2 + 1] = Int16(max(-1, min(1, ch[1][i])) * 32767) }
+        pcm.withUnsafeBytes { d.append(contentsOf: $0) }
+        sounds[cue] = d
+        return d
     }
 
     /// Saves a sound to a file, for listening to it outside the app. Returns the loudest sample.
@@ -606,9 +609,11 @@ final class Sfx {
     func play(_ cue: Cue) {
         guard Sfx.enabled else { return }
         queue.async {
-            guard self.prepare(), let b = self.buffers[cue] else { return }
-            self.player.scheduleBuffer(b, at: nil, options: [], completionHandler: nil)
-            if !self.player.isPlaying { self.player.play() }
+            guard let d = self.wav(cue), let p = try? AVAudioPlayer(data: d) else { return }
+            p.volume = 0.55
+            p.play()
+            self.playing.removeAll { !$0.isPlaying }
+            self.playing.append(p)                  // kept until it finishes
         }
     }
 

@@ -15,13 +15,15 @@ final class AISession {
     private var input: FileHandle?
     private var buffer = Data()
     private let lock = NSLock()
-    private var waiting: DispatchSemaphore?
-    private var answer = ""
+    /// One question waiting for its answer. Claude answers in the order it was asked, so replies are
+    /// matched to the oldest question still waiting: a late reply can never become the answer to a newer one.
+    private final class Turn {
+        let sem = DispatchSemaphore(value: 0)
+        var answer = "", partial = ""
+        var onText: ((String) -> Void)?, onTool: ((String) -> Void)?
+    }
+    private var pending: [Turn] = []
     private var turns = 0
-    // While an answer is being written: everything so far, and what to tell as it grows.
-    private var partial = ""
-    private var onText: ((String) -> Void)?
-    private var onTool: ((String) -> Void)?
     static var model: String {
         (try? String(contentsOf: baseDir.appendingPathComponent("ai-model.txt"), encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "sonnet"
     }
@@ -108,7 +110,11 @@ final class AISession {
             if data.isEmpty { h.readabilityHandler = nil; return }
             self?.feed(data)
         }
-        p.terminationHandler = { [weak self] _ in self?.lock.lock(); self?.waiting?.signal(); self?.lock.unlock() }
+        p.terminationHandler = { [weak self] _ in
+            guard let self = self else { return }
+            self.lock.lock(); let left = self.pending; self.pending = []; self.lock.unlock()
+            left.forEach { $0.sem.signal() }
+        }
         do { try p.run(); process = p; input = inPipe.fileHandleForWriting; turns = 0; buffer = Data() } catch { process = nil }
     }
 
@@ -127,30 +133,33 @@ final class AISession {
             let line = buffer[buffer.startIndex..<nl]
             buffer.removeSubrange(buffer.startIndex...nl)
             guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
-            if obj["type"] as? String == "stream_event", let ev = obj["event"] as? [String: Any] {
+            let turn = pending.first
+            if obj["type"] as? String == "stream_event", let ev = obj["event"] as? [String: Any], let turn = turn {
                 if ev["type"] as? String == "content_block_delta", let d = ev["delta"] as? [String: Any], d["type"] as? String == "text_delta", let t = d["text"] as? String {
-                    partial += t
-                    let f = onText, now = partial
+                    turn.partial += t
+                    let f = turn.onText, now = turn.partial
                     if let f = f { DispatchQueue.global(qos: .userInitiated).async { f(now) } }
                 } else if ev["type"] as? String == "content_block_start", let b = ev["content_block"] as? [String: Any], b["type"] as? String == "tool_use" {
                     let name = (b["name"] as? String) ?? "tool"
                     // Text written before a search is a preamble; the answer proper starts after it.
-                    partial += "\n"
-                    if let f = onTool { DispatchQueue.global(qos: .userInitiated).async { f(name) } }
+                    turn.partial += "\n"
+                    if let f = turn.onTool { DispatchQueue.global(qos: .userInitiated).async { f(name) } }
                 }
                 continue
             }
             guard obj["type"] as? String == "result" else { continue }
-            answer = (obj["result"] as? String) ?? ""
-            if (obj["is_error"] as? Bool) == true || answer.contains("authenticate") || answer.contains("401") {
-                if answer.contains("authenticate") || answer.contains("401") {
+            var answer = (obj["result"] as? String) ?? ""
+            // Only Claude's own error messages count: an answer about Highway 401 is still an answer.
+            let authFailed = AI.authFailed(answer)
+            if (obj["is_error"] as? Bool) == true || authFailed {
+                if authFailed {
                     if !signedOut { logLine("AI: Claude is signed out (\(answer.prefix(90))); using the built-in model"); ui("brain built-in") }
                     signedOut = true; signedOutAt = now()
                     process?.terminate()
                 } else { logLine("AI: Claude answered with an error: \(answer.prefix(120))") }
                 answer = ""
             }
-            waiting?.signal()
+            if let turn = turn { pending.removeFirst(); turn.answer = answer; turn.sem.signal() }
         }
     }
 
@@ -175,25 +184,21 @@ final class AISession {
         start()
         lock.lock()
         guard let input = input, process?.isRunning == true else { lock.unlock(); return nil }
-        let sem = DispatchSemaphore(value: 0)
-        waiting = sem
-        answer = ""
-        partial = ""
-        self.onText = onText
-        self.onTool = onTool
+        let turn = Turn()
+        turn.onText = onText; turn.onTool = onTool
+        pending.append(turn)
         turns += 1
         let stale = turns > 40
         let message: [String: Any] = ["type": "user", "message": ["role": "user", "content": [["type": "text", "text": "[\(state)]\n\(question)"]]]]
         guard var data = try? JSONSerialization.data(withJSONObject: message) else { lock.unlock(); return nil }
         data.append(10)
         lock.unlock()
-        do { try input.write(contentsOf: data) } catch { return nil }
-        let timedOut = sem.wait(timeout: .now() + 75) == .timedOut
+        do { try input.write(contentsOf: data) } catch { lock.lock(); pending.removeAll { $0 === turn }; lock.unlock(); return nil }
+        let timedOut = turn.sem.wait(timeout: .now() + 75) == .timedOut
         lock.lock()
-        let got = answer
-        waiting = nil
-        self.onText = nil
-        self.onTool = nil
+        let got = turn.answer
+        turn.onText = nil; turn.onTool = nil
+        pending.removeAll { $0 === turn }
         lock.unlock()
         // A long conversation is started afresh now and then, so it stays quick.
         if stale || timedOut { shutDown(); DispatchQueue.global().asyncAfter(deadline: .now() + 1) { self.start() } }
